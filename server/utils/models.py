@@ -118,6 +118,85 @@ class ChatDataAgentInbox(Base):
     )
 
 
+class ChatDataSubagentSession(Base):
+    """后台子智能体多轮会话快照。
+
+    一个子智能体会话（``session_id`` 等于该智能体的 ``agent_session_id``；
+    当前首轮等于 ``task_id``）只保留一行“当前完整消息历史”。每次追问收口时
+    整体覆盖，避免按轮次追加导致历史呈 O(n²) 增长；追问直接复用这份快照继续
+    对话。任务账本仍按轮次各保留一行，便于审计与取消。
+    """
+
+    __tablename__ = "chat_data_subagent_session"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    conversation_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    latest_task_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    turn_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    messages_json: Mapped[str] = mapped_column(MediumTextType, nullable=False, default="[]", server_default="[]")
+    session_status: Mapped[str] = mapped_column(String(16), nullable=False, default="open", server_default="open")
+    closed_time: Mapped[datetime | None] = mapped_column(DateTime)
+    delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    update_time: Mapped[datetime | None] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    create_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("session_id", name="uniq_subagent_session_id"),
+        Index("idx_subagent_session_conv", "conversation_id", "user_id"),
+    )
+
+
+class ChatDataSubagentEvent(Base):
+    """子智能体生命周期事件 outbox。
+
+    状态变更与事件写入同一事务，由统一 dispatcher 投递到主智能体：
+    ``wake`` 会在会话空闲时创建唤醒 Run，``attach`` 只挂当前活跃 Run，
+    ``silent`` 仅留审计不投递。每个事件独立记录投递状态，因此同一任务
+    可以先后产生审批、取消、用户追问等多条通知，不再依赖任务行的
+    ``consumed_time`` 表达全部语义。
+    """
+
+    __tablename__ = "chat_data_subagent_event"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    event_id: Mapped[str] = mapped_column(String(96), nullable=False)
+    parent_run_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    task_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    conversation_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    task_status: Mapped[str] = mapped_column(String(32), nullable=False, default="", server_default="")
+    wake_policy: Mapped[str] = mapped_column(String(16), nullable=False, default="wake", server_default="wake")
+    event_content: Mapped[str] = mapped_column(MediumTextType, nullable=False, default="")
+    record_meta: Mapped[str | None] = mapped_column(Text, nullable=True)
+    delivery_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending", server_default="pending"
+    )
+    delivery_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    last_error: Mapped[str] = mapped_column(String(500), nullable=False, default="", server_default="")
+    delivered_time: Mapped[datetime | None] = mapped_column(DateTime)
+    delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    update_time: Mapped[datetime | None] = mapped_column(DateTime, server_default=func.now(), onupdate=func.now())
+    create_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("event_id", name="uniq_subagent_event_id"),
+        Index("idx_subagent_event_conv", "conversation_id", "user_id", "delivery_status"),
+        Index("idx_subagent_event_task", "task_id", "event_type", "delivery_status"),
+    )
+
+
 class UploadedFile(Base):
     """上传文件表"""
 
@@ -970,7 +1049,8 @@ class ChatDataAgentScheduleRun(Base):
     conversation_id: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
     plan_time: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     # pending-待派发 claimed-已抢占 dispatched-已提交 Agent Run
-    # succeeded/failed/cancelled-随 Run 终态收口 skipped-重试耗尽或窗口过期
+    # finished/failed/cancelled/interrupted-随 Run 终态收口 skipped-重试耗尽或窗口过期
+    # 历史 succeeded 保留原值；业务层读取时统一映射为 finished
     trigger_status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", server_default="pending")
     trigger_type: Mapped[str] = mapped_column(String(16), nullable=False, default="schedule", server_default="schedule")
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
@@ -1083,6 +1163,7 @@ class ChatDataPlugin(Base):
     display_name: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
     description: Mapped[str] = mapped_column(String(500), nullable=False, default="", server_default="")
     enabled_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1, server_default="1")
+    scope_type: Mapped[str] = mapped_column(String(20), nullable=False, default="all", server_default="all")
     manifest_text: Mapped[str | None] = mapped_column(Text)
     delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
     create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
@@ -1097,6 +1178,34 @@ class ChatDataPlugin(Base):
     __table_args__ = (
         UniqueConstraint("plugin_name", name="uniq_plugin_name"),
         Index("idx_plugin_enabled_delete", "enabled_flag", "delete_flag"),
+    )
+
+
+class ChatDataPluginPermission(Base):
+    """ChatData 插件人员权限表。
+
+    仅约束插件及其随插件安装的技能。MCP 后续使用独立权限表，不读取本表。
+    生产库无 DELETE 权限，撤销授权统一软删；重新授权必须复活原唯一键行。
+    """
+
+    __tablename__ = "chat_data_plugin_permission"
+
+    id: Mapped[int] = mapped_column(AutoIncrementId, primary_key=True, autoincrement=True)
+    plugin_name: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    user_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    delete_flag: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0, server_default="0")
+    create_time: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    update_time: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+    create_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    create_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+    update_by: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    update_by_name: Mapped[str] = mapped_column(String(100), nullable=False, default="", server_default="")
+
+    __table_args__ = (
+        UniqueConstraint("plugin_name", "user_name", name="uniq_plugin_permission"),
+        Index("idx_plugin_permission_user", "user_name", "plugin_name"),
     )
 
 
@@ -1197,9 +1306,7 @@ class ChatDataOntologyObjectType(Base):
     conflict_resolution: Mapped[str] = mapped_column(
         String(32), nullable=False, default="apply_user_edits", server_default="apply_user_edits"
     )
-    conflict_timestamp_property: Mapped[str] = mapped_column(
-        String(128), nullable=False, default="", server_default=""
-    )
+    conflict_timestamp_property: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     ontology_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, default=None)
     deprecation_reason: Mapped[str] = mapped_column(String(512), nullable=False, default="", server_default="")
     deprecated_until: Mapped[datetime | None] = mapped_column(DateTime)

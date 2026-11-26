@@ -7,6 +7,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from langchain_core.messages import HumanMessage
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
@@ -97,6 +98,96 @@ async def test_persist_agent_user_message_without_message_is_noop():
 
 
 @pytest.mark.asyncio
+async def test_persist_agent_user_message_schedules_title_after_persistence(monkeypatch):
+    calls: list[tuple] = []
+    phases: list[str] = []
+
+    async def fake_persist(**kwargs):
+        calls.append(("persist", kwargs))
+
+    def fake_schedule(**kwargs):
+        calls.append(("title", kwargs))
+
+    monkeypatch.setattr(agent_run_support.conversation_event_service, "persist_user_message", fake_persist)
+    monkeypatch.setattr(agent_run_support.conversation, "schedule_title_generation", fake_schedule)
+    callbacks = SimpleNamespace(
+        user_message=HumanMessage(content="分析销售额", id="turn-1"),
+        thread_id="conv-1",
+        user_id="user-1",
+        username="用户一",
+        run_id="run-1",
+        owner_token="owner-1",
+        model_id="model-1",
+        log_phase=phases.append,
+    )
+
+    await agent_run_support._persist_agent_user_message(callbacks)  # type: ignore[arg-type]
+
+    assert calls[0][0] == "persist"
+    assert calls[0][1]["conversation_id"] == "conv-1"
+    assert calls[0][1]["operator_name"] == "用户一"
+    assert calls[1][0] == "title"
+    schedule_kwargs = calls[1][1]
+    assert schedule_kwargs["conversation_id"] == "conv-1"
+    assert schedule_kwargs["user_id"] == "user-1"
+    assert schedule_kwargs["model_id"] == "model-1"
+    assert callable(schedule_kwargs["on_updated"])
+    assert phases == ["persist_user_message"]
+
+
+@pytest.mark.asyncio
+async def test_persist_agent_user_message_does_not_put_user_id_in_operator_name(monkeypatch):
+    captured: dict = {}
+
+    async def fake_persist(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(agent_run_support.conversation_event_service, "persist_user_message", fake_persist)
+    monkeypatch.setattr(agent_run_support.conversation, "schedule_title_generation", lambda **_kwargs: None)
+    callbacks = SimpleNamespace(
+        user_message=HumanMessage(content="分析销售额", id="turn-1"),
+        thread_id="conv-1",
+        user_id="u1",
+        username=None,
+        run_id="run-1",
+        owner_token="owner-1",
+        model_id="model-1",
+        log_phase=lambda _phase: None,
+    )
+
+    await agent_run_support._persist_agent_user_message(callbacks)  # type: ignore[arg-type]
+
+    assert captured["user_id"] == "u1"
+    assert captured["operator_name"] == ""
+
+
+@pytest.mark.asyncio
+async def test_publish_agent_title_updated_appends_title_sse(monkeypatch):
+    captured: dict = {}
+
+    async def fake_append(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(agent_run_support.agent_run_event_service, "append", fake_append)
+    callbacks = SimpleNamespace(
+        thread_id="conv-1",
+        user_id="user-1",
+        run_id="run-1",
+        owner_token="owner-1",
+    )
+
+    await agent_run_support._publish_agent_title_updated(callbacks, "销售额分析")  # type: ignore[arg-type]
+
+    assert captured["run_id"] == "run-1"
+    assert captured["conversation_id"] == "conv-1"
+    assert captured["user_id"] == "user-1"
+    assert captured["owner_token"] == "owner-1"
+    assert captured["event_id"].startswith("run-1:title:")
+    assert "event: conversation_title_updated" in captured["payload"]
+    assert '"title": "销售额分析"' in captured["payload"]
+
+
+@pytest.mark.asyncio
 async def test_persist_agent_partial_history_marks_question_resume_started(monkeypatch):
     """异常收口时若 resume 答案已写入且图已推进，必须把旧问题标记为已恢复。"""
     marked: list[tuple] = []
@@ -164,6 +255,39 @@ async def test_persist_agent_partial_history_skips_mark_when_interrupt_pending(m
     )
     await agent_run_support._persist_agent_partial_history(callbacks)  # type: ignore[arg-type]
     assert marked == []
+
+
+@pytest.mark.asyncio
+async def test_persist_agent_failure_forwards_stats_and_returns_error_sse(monkeypatch):
+    captured: dict = {}
+
+    async def fake_persist(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(agent_run_support.conversation_event_service, "persist_turn_error", fake_persist)
+    adapter = SimpleNamespace(supersteps=7, config={"recursion_limit": 7})
+    req = SimpleNamespace(
+        thread_id="conv-1", user_id="user-1", username=None, turn_id="turn-1", resume_turn_id=None, run_id="run-1"
+    )
+    callbacks = SimpleNamespace(effective_turn_id="turn-1", stream_adapter=adapter)
+
+    event = await agent_run_support._persist_agent_failure(
+        req,
+        callbacks,
+        RuntimeError("graph failed"),
+        "本轮执行已达到 7 步上限，任务被中止。",
+    )
+
+    assert captured["conversation_id"] == "conv-1"
+    assert captured["operator_name"] == ""
+    assert captured["turn_id"] == "turn-1"
+    assert captured["run_id"] == "run-1"
+    assert captured["error"] == "本轮执行已达到 7 步上限，任务被中止。"
+    assert captured["error_type"] == "RuntimeError"
+    assert captured["supersteps"] == 7
+    assert captured["recursion_limit"] == 7
+    assert "event: error" in event
+    assert "本轮执行已达到 7 步上限" in event
 
 
 @pytest.mark.asyncio

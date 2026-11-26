@@ -13,7 +13,9 @@ import os
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from functools import partial
+from typing import TYPE_CHECKING, Any, Protocol, cast
+from uuid import uuid4
 
 from fastapi import Request
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
@@ -25,10 +27,10 @@ from .agent import AgentRuntimeOptions
 from .agent.context.context_budget import compact_context_usage_for_history, sanitize_context_usage_for_response
 from .agent.middleware.steering import SteeringMessageTracker
 from .agent.run.agent_inbox_service import agent_inbox_service
+from .agent.run.agent_run_event_service import agent_run_event_service
 from .agent.run.conversation_event_service import conversation_event_service
 from .agent.skills import format_skills_prompt
 from .agent.workspace.runtime_skill_snapshot import (
-    build_runtime_skill_snapshot_async,
     list_snapshot_skill_metadata,
 )
 from .services import conversation_service as conversation
@@ -44,6 +46,7 @@ from .services.semantic.run.semantic_conversation_context import (
     prepare_semantic_conversation_context,
 )
 from .services.semantic.run.semantic_materializer import prematerialize_enabled_semantic_models
+from .sse_protocol import SSE_EVENT_CONVERSATION_TITLE_UPDATED, SSE_EVENT_ERROR, format_sse
 
 if TYPE_CHECKING:
     from .agent_stream import _AgentSseStreamAdapter
@@ -89,7 +92,7 @@ async def materialize_conversation_semantic_models(
     user_id: str,
     datasource_id: str | None,
 ) -> dict[str, Any]:
-    """会话创建时把当前数据源组全部启用语义模型物化到 ``workspace/semantic/``。
+    """会话创建时把当前数据源组全部启用语义模型物化到 ``workspace/.system/semantic/``。
 
     输入框 @ 引用改走工作区文件后，语义模型以 YAML 文件形态出现在 @ 菜单里；
     在建会话时就物化，用户第一条消息即可引用，不必等首轮 run。物化本身幂等
@@ -132,17 +135,11 @@ async def materialize_conversation_semantic_models(
 
 def _build_agent_context_state(
     *,
-    user_id: str | None,
-    operator_name: str | None,
     conversation_id: str,
     **extra_state: Any,
 ) -> dict[str, Any]:
     """构造单一 Agent 的状态字段。"""
-    state = {
-        "user_id": user_id,
-        "operator_name": operator_name or "",
-        "conversation_id": conversation_id,
-    }
+    state = {"conversation_id": conversation_id}
     state.update(extra_state)
     return state
 
@@ -283,6 +280,41 @@ def _resolve_history_stream_id(
     return stream_event_id_provider() if stream_event_id_provider else None
 
 
+def _merge_generation_stats_into_latest_ai(
+    messages: list[BaseMessage],
+    generation_stats: dict[str, int] | None,
+) -> list[BaseMessage]:
+    """把失败轮次的统计补到最后一条 AI 消息，供部分历史回放展示。"""
+    if not generation_stats:
+        return messages
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if not isinstance(message, AIMessage):
+            continue
+        additional_kwargs = dict(getattr(message, "additional_kwargs", None) or {})
+        existing = additional_kwargs.get("generation_stats")
+        additional_kwargs["generation_stats"] = {
+            **(existing if isinstance(existing, dict) else {}),
+            **generation_stats,
+        }
+        patched = message.model_copy(update={"additional_kwargs": additional_kwargs})
+        return [*messages[:index], patched, *messages[index + 1 :]]
+    return messages
+
+
+def _failure_generation_stats(stream_adapter: Any | None) -> dict[str, int]:
+    """失败轮次可观测统计：仅取已经完成推进的图步数，不补造未完成步骤。"""
+    supersteps = getattr(stream_adapter, "supersteps", 0)
+    if not isinstance(supersteps, int) or supersteps <= 0:
+        return {}
+    stats = {"supersteps": supersteps}
+    config = getattr(stream_adapter, "config", None)
+    recursion_limit = config.get("recursion_limit") if isinstance(config, dict) else None
+    if isinstance(recursion_limit, int) and recursion_limit > 0:
+        stats["recursion_limit"] = recursion_limit
+    return stats
+
+
 async def _persist_agent_turn_history(
     stream_adapter: "_AgentSseStreamAdapter",
     *,
@@ -295,6 +327,7 @@ async def _persist_agent_turn_history(
     owner_token: str | None = None,
     stream_event_id_provider: Callable[[], str | None] | None = None,
     snapshot_stream_id: str | None = None,
+    generation_stats: dict[str, int] | None = None,
 ) -> None:
     """将本轮完整消息、工具结果和思考分段追加到独立历史。"""
     values = state_override
@@ -308,6 +341,7 @@ async def _persist_agent_turn_history(
         state_messages,
         turn_id=turn_id,
     )
+    messages = _merge_generation_stats_into_latest_ai(messages, generation_stats)
     turn_ids = _resolve_history_turn_ids(messages, turn_id)
     usage = _resolve_history_usage(values, stream_adapter)
     history_signatures = getattr(stream_adapter, "history_event_signatures", None)
@@ -317,7 +351,7 @@ async def _persist_agent_turn_history(
         persist_kwargs = {
             "conversation_id": conversation_id,
             "user_id": user_id,
-            "operator_name": username or user_id,
+            "operator_name": username or "",
             "turn_id": current_turn_id,
             "messages": messages,
             "reasoning_segments": stream_adapter.reasoning_segments,
@@ -472,6 +506,7 @@ async def _persist_partial_agent_turn_history(
     try:
         if stream_adapter.state is None and hasattr(stream_adapter.agent, "aget_state"):
             stream_adapter.state = await stream_adapter.agent.aget_state(stream_adapter.config)
+        generation_stats = _failure_generation_stats(stream_adapter)
         await _persist_agent_turn_history(
             stream_adapter,
             conversation_id=conversation_id,
@@ -481,6 +516,7 @@ async def _persist_partial_agent_turn_history(
             run_id=run_id,
             owner_token=owner_token,
             stream_event_id_provider=stream_event_id_provider,
+            generation_stats=generation_stats,
         )
     except Exception:
         logger.warning("流异常后的会话历史补写失败: conversation_id=%s", conversation_id, exc_info=True)
@@ -520,21 +556,15 @@ async def _resolve_workspace_created_date(thread_id: str, user_id: str | None) -
 async def _prepare_agent_semantic_context(
     *,
     thread_id: str,
-    user_query: str,
     datasource_id: str | None,
     user_id: str | None,
-    username: str | None,
-    member_datasource_ids: list[str] | None,
     semantic_config_id: str | None,
 ) -> SemanticConversationContext:
     """准备语义会话上下文并校验数据源绑定；致命失败抛 _AgentRunPreparationError。"""
     semantic_context = await prepare_semantic_conversation_context(
         datasource_id=datasource_id,
         semantic_config_id=semantic_config_id,
-        member_datasource_ids=member_datasource_ids,
         user_id=user_id,
-        username=username,
-        user_query=user_query,
     )
     if semantic_context.semantic_config_error:
         logger.warning("智能问数指标集准备失败: %s", semantic_context.semantic_config_error)
@@ -562,6 +592,7 @@ async def _prepare_agent_workspace_runtime(
     thread_id: str,
     datasource_id: str | None,
     user_id: str | None,
+    username: str | None,
     semantic_context: SemanticConversationContext,
     runtime_options: AgentRuntimeOptions,
     created_date: str | None,
@@ -578,9 +609,10 @@ async def _prepare_agent_workspace_runtime(
         workspace_root=workspace_paths["root"],
         user_id=user_id_str,
         backend=runtime_options.workspace_backend,
+        username=str(username or "").strip(),
     )
     # 语义目录预物化：agent 循环前把全部启用模型写好，模型可不经 semantic_search
-    # 直接 dir_list/file_grep/file_read 检索 /mnt/user-data/workspace/semantic/。
+    # 直接 dir_list/file_grep/file_read 检索 /mnt/user-data/workspace/.system/semantic/。
     # 目录是语义检索的唯一来源，物化异常属基础设施故障：带着空目录继续只会让
     # 模型误判为“没有语义模型”，因此直接终止本轮，不进入 agent 循环。
     # 部分模型物化失败不终止本轮，但把缺失清单注入上下文，让模型能区分
@@ -633,12 +665,10 @@ async def _load_runtime_skills_xml(
     available_skills: list[dict[str, Any]] = []
     available_skills_xml = format_skills_prompt([])
     # runtime-skills 是模型实际读取、file_read 解析及沙箱挂载的唯一技能真相。
-    # 先构建/复用会话快照，再从同一目录生成系统提示词技能清单，不能回退管理域。
+    # 先构建/复用该用户的共享快照，再从同一目录生成系统提示词技能清单，不能回退管理域。
     try:
-        # 快照目录由工作区根推导，保证与实际工作区同一日期分层（不从 uid/cid 反推）。
-        snapshot_dir = await build_runtime_skill_snapshot_async(
-            user_id, thread_id, target_dir=workspace_runtime.runtime_skills_dir
-        )
+        # 本轮固定使用用户共享快照 ``threads/<uid>/runtime/skills``（按指纹重建）。
+        snapshot_dir = await workspace_runtime.ensure_runtime_skills_async()
         available_skills = await asyncio.to_thread(list_snapshot_skill_metadata, snapshot_dir)
         available_skills_xml = format_skills_prompt(available_skills)
     except Exception as err:
@@ -712,12 +742,9 @@ async def _offload_oversized_user_input(
 def _resolve_agent_initial_state(
     *,
     resume_answer: dict[str, Any] | None,
-    user_id: str | None,
-    operator_name: str | None,
     conversation_id: str,
     adopted_messages: list[HumanMessage] | None,
     user_message: HumanMessage | None,
-    datasource_id: str | None,
     semantic_context: SemanticConversationContext,
     runtime_options: AgentRuntimeOptions,
     workspace_root: str,
@@ -726,15 +753,8 @@ def _resolve_agent_initial_state(
     if resume_answer is not None:
         return Command(resume=resume_answer)
     return _build_agent_context_state(
-        user_id=user_id,
-        operator_name=operator_name,
         conversation_id=conversation_id,
         messages=[*(adopted_messages or []), *([user_message] if user_message else [])],
-        execution_context={
-            "datasource_id": datasource_id,
-            "available_member_datasource_ids": semantic_context.available_member_datasource_ids,
-            "matched_member_datasource_ids": semantic_context.matched_member_datasource_ids,
-        },
         workspace={
             "workspace_root": workspace_root,
             "workspace_backend": runtime_options.workspace_backend,
@@ -789,6 +809,7 @@ class _AgentRunStreamCallbacks:
     stream_event_id_provider: Callable[[], str | None] | None
     log_phase: Callable[[str], Any]
     steering_tracker: SteeringMessageTracker
+    model_id: str | None = None
     workspace_root: str = ""
     adopted_messages: list[HumanMessage] | None = None
     user_message: HumanMessage | None = None
@@ -911,10 +932,39 @@ async def _persist_agent_user_message(callbacks: _AgentRunStreamCallbacks) -> No
     await conversation_event_service.persist_user_message(
         conversation_id=callbacks.thread_id,
         user_id=callbacks.user_id,
-        operator_name=callbacks.username or callbacks.user_id,
+        operator_name=callbacks.username or "",
         message=callbacks.user_message,
     )
+    # 标题是会话元数据：用户消息落库后再异步生成，不阻塞主回答。
+    # 每轮都调度，服务层只会在标题仍是占位符时真正调用模型。
+    conversation.schedule_title_generation(
+        conversation_id=callbacks.thread_id,
+        user_id=callbacks.user_id,
+        model_id=callbacks.model_id,
+        on_updated=partial(_publish_agent_title_updated, callbacks),
+    )
     callbacks.log_phase("persist_user_message")
+
+
+async def _publish_agent_title_updated(callbacks: _AgentRunStreamCallbacks, title: str) -> None:
+    """把标题结果追加到当前 Run 的 SSE；Run 已收口时由列表刷新兜底。"""
+    if not callbacks.run_id or not callbacks.owner_token:
+        return
+    payload = format_sse(
+        SSE_EVENT_CONVERSATION_TITLE_UPDATED,
+        {"conversation_id": callbacks.thread_id, "title": title},
+    )
+    try:
+        await agent_run_event_service.append(
+            run_id=callbacks.run_id,
+            conversation_id=callbacks.thread_id,
+            user_id=callbacks.user_id,
+            event_id=f"{callbacks.run_id}:title:{uuid4().hex}",
+            payload=payload,
+            owner_token=callbacks.owner_token,
+        )
+    except Exception:
+        logger.info("标题事件推送失败，等待会话列表刷新兜底: %s", callbacks.thread_id, exc_info=True)
 
 
 async def _persist_agent_turn_history_snapshot(callbacks: _AgentRunStreamCallbacks) -> None:
@@ -958,6 +1008,60 @@ async def _persist_agent_partial_history(callbacks: _AgentRunStreamCallbacks) ->
         and not callbacks.stream_adapter.pending_interrupt()
     ):
         await agent_inbox_service.mark_question_resume_started(callbacks.run_id, callbacks.owner_token)
+
+
+class _TurnFailureRequest(Protocol):
+    """失败收口只需要请求里的会话与轮次定位字段。"""
+
+    @property
+    def thread_id(self) -> str: ...
+
+    @property
+    def user_id(self) -> str: ...
+
+    @property
+    def username(self) -> str | None: ...
+
+    @property
+    def turn_id(self) -> str | None: ...
+
+    @property
+    def resume_turn_id(self) -> str | None: ...
+
+    @property
+    def run_id(self) -> str | None: ...
+
+
+async def _persist_agent_failure(
+    req: _TurnFailureRequest,
+    callbacks: _AgentRunStreamCallbacks | None,
+    exc: Exception,
+    error: str,
+) -> str:
+    """尽力持久化本轮终止原因，并返回下发的 error SSE；落库失败不阻断原始异常。"""
+    adapter = callbacks.stream_adapter if callbacks is not None else None
+    stats = _failure_generation_stats(adapter)
+    turn_id = callbacks.effective_turn_id if callbacks is not None else (req.turn_id or req.resume_turn_id or "")
+    try:
+        await conversation_event_service.persist_turn_error(
+            conversation_id=req.thread_id,
+            user_id=req.user_id,
+            operator_name=req.username or "",
+            turn_id=turn_id,
+            error=error,
+            error_type=exc.__class__.__name__,
+            run_id=req.run_id,
+            supersteps=stats.get("supersteps"),
+            recursion_limit=stats.get("recursion_limit"),
+        )
+    except Exception:
+        logger.warning(
+            "失败轮次错误事件落库失败: conversation_id=%s turn_id=%s",
+            req.thread_id,
+            turn_id,
+            exc_info=True,
+        )
+    return format_sse(SSE_EVENT_ERROR, {"error": error})
 
 
 async def _mark_agent_resume_checkpointed(callbacks: _AgentRunStreamCallbacks) -> None:

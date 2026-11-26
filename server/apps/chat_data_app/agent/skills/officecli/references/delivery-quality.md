@@ -4,13 +4,13 @@
 
 ## 通用交付门
 
-交付前按顺序执行：
+交付前按顺序执行。**QA 是找 bug，不是确认**——首次检查零问题通常代表查得不够细；假设一定有问题。
 
 1. 用 `officecli_run(command_args=["validate", file])` 检查 OpenXML 结构。
 2. 用 `officecli_run(command_args=["view", file, "issues"])` 检查空内容、溢出、破损引用、缺失资源和格式问题。
-3. 用 `officecli_run(command_args=["view", file, "text"])` 检查占位符、残留转义字符和明显的截断内容。
-4. 需要视觉确认时优先 `view screenshot` 截图后用 `file_read` 读图（报 `No headless browser available` 时改用 `view html`）；结构校验通过不等于页面排版正确。
-5. 通过检查后，将最终文件放入 `outputs/` 并调用 `present_artifacts`。检查失败时修复后重跑，不声称已交付。
+3. 用 `officecli_run(command_args=["view", file, "text"])` 检查占位符、残留转义字符和明显的截断内容。以下令牌出现在标题、正文、封面、页眉页脚或图表标题即为交付失败：`$xxx$`、`{var}`、`{{name}}`、`<TODO>`、`lorem`、`xxxx`，以及残留的 `\$`/`\t`/`\n` 字面转义；确实供人填写的说明令牌只能放进明显的"使用说明"段落，不能当正文交付。
+4. 需要视觉确认时优先 `view screenshot` 截图后用 `read_image` 读图复核（报 `No headless browser available` 时改用 `view html`）；结构校验通过不等于页面排版正确。
+5. 通过检查后，将最终文件放入 `outputs/` 并调用 `present_artifacts`。任何一项检查失败：修复后**重跑整轮**（一次修复常引入新问题），不声称已交付。
 
 ## Word
 
@@ -18,6 +18,7 @@
 - 非简单文档应有清晰的标题、一级/二级标题和正文层级，不要把全文写成无样式的 Normal 段落。
 - 用 `spaceBefore`、`spaceAfter` 和分页属性控制间距，禁止用连续空段撑版面。
 - 超过一页的报告应考虑页眉、页脚和动态页码；不要写死“第 1 页”。
+- 封面与尾页要有实质内容：封面按模版补齐副标题、汇报单位、日期、范围或关键要点，尾页用结论、下一步或联系方式补足，不留大面积空白；含 3 个以上标题的报告应有 TOC，TOC 源不合格先修标题结构再插入。
 - 表格和图表交付前检查是否跨页异常、文字裁切和图片缺少替代文本。
 
 ## Excel

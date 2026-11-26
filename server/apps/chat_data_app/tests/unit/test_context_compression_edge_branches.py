@@ -486,6 +486,26 @@ async def test_middleware_emits_compression_started_event_before_completed(monke
 
 
 @pytest.mark.asyncio
+async def test_middleware_emits_started_event_when_tool_offload_skips_summary(monkeypatch):
+    """工具结果外置已达标、跳过摘要的路径同样先发「压缩中」，否则只会看到完成卡。"""
+    captured: list[dict] = []
+    middleware = _middleware(monkeypatch, trigger=1, target=100_000, hard_limit=200_000)
+    monkeypatch.setattr(context_compression, "get_stream_writer", lambda: (lambda payload: captured.append(payload)))
+    monkeypatch.setattr(
+        context_compression,
+        "_reference_tool_results_to_target",
+        lambda messages, **_kwargs: ([], 27),
+    )
+    messages = [HumanMessage(content="当前问题", id="u-current")]
+
+    update = await middleware.abefore_model({"messages": messages, "context_summary": None}, None)
+
+    phases = [payload["event"]["phase"] for payload in captured if payload.get("type") == "context_compression"]
+    assert phases == ["started", "completed"]
+    assert update["context_compression"]["triggered"] is True
+
+
+@pytest.mark.asyncio
 async def test_middleware_skips_started_event_when_compression_not_triggered(monkeypatch):
     """未触发摘要压缩时不推送 started 占位，避免每次模型调用都出现占位分界。"""
     captured: list[dict] = []

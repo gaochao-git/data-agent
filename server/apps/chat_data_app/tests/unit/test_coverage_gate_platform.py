@@ -160,6 +160,7 @@ def test_install_plugin_cleans_stale_staging_dir(plugin_install_root):
     staging = plugin_install_root / "demo.installing"
     staging.mkdir()
     (staging / "stale.txt").write_text("stale", encoding="utf-8")
+    os.utime(staging, (0, 0))
 
     manifest = installer.install_plugin_from_zip_bytes(data)
 
@@ -532,7 +533,7 @@ def test_write_local_text_file_rejects_unsupported_mode(local_workspace):
 
 def test_write_local_text_file_rejects_managed_write_outside_semantic(local_workspace):
     root, _runtime = local_workspace
-    with pytest.raises(ValueError, match="内部系统写入只允许"):
+    with pytest.raises(ValueError, match="内部语义模型写入"):
         lb._write_local_text_file(
             str(root),
             "/mnt/user-data/workspace/note.txt",
@@ -574,7 +575,7 @@ def test_write_local_text_file_managed_guard_rejects_non_semantic_path(local_wor
     target = root / "workspace" / "note.txt"
     monkeypatch.setattr(lb, "resolve_workspace_path", lambda *_args, **_kwargs: target)
 
-    with pytest.raises(ValueError, match="内部系统写入只允许"):
+    with pytest.raises(ValueError, match="内部语义模型写入"):
         lb._write_local_text_file(
             str(root),
             "/mnt/user-data/workspace/note.txt",
@@ -1012,4 +1013,4 @@ async def test_mark_agent_waiting_for_user_skips_without_run_id_and_marks_with_r
     mark = SimpleNamespace(run_id="run-1", effective_turn_id="turn-1", username=None, user_id=None, owner_token="tok")
     await agent_stream._mark_agent_waiting_for_user(mark, question)
     assert question["turn_id"] == "turn-1"
-    assert called == [("run-1", question, "system", "system", "tok")]
+    assert called == [("run-1", question, "system", "", "tok")]

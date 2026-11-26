@@ -6,7 +6,8 @@
 本模块维护一份进程内 ``_enabled_state`` 快照，由 :func:`refresh_plugin_state` 从 DB
 异步刷新；每个需要插件状态的入口（会话装配、技能快照、管理端列表）先 await 刷新，
 同步读取方（``enabled_plugins`` 等）消费该快照。DB 读失败按不可用处理（快照清空、
-fail-closed），不兜底旧值。磁盘缓存只存内容（manifest+目录），启停在读取时叠加。
+fail-closed），不兜底旧值。磁盘缓存只存内容（manifest+目录+manifest 文件指纹），
+启停在读取时叠加；指纹逐轮校验，``plugin.json`` 一旦变化即重读，不依赖安装/卸载回调。
 """
 
 from __future__ import annotations
@@ -58,59 +59,103 @@ class PluginMetadata:
         }
 
 
-# 磁盘内容缓存（manifest+目录），与启停解耦；启停来自 _enabled_state。
-_disk_cache: dict[str, tuple[PluginManifest, Path]] | None = None
+@dataclass(frozen=True)
+class _CachedPlugin:
+    """一条磁盘缓存：manifest、插件目录与 ``plugin.json`` 文件指纹。"""
+
+    manifest: PluginManifest
+    dir: Path
+    fingerprint: tuple[int, int, int]
+
+
+# 磁盘内容缓存（manifest+目录+指纹），与启停解耦；启停来自 _enabled_state。
+# 指纹取 ``plugin.json`` 的 (mtime_ns, ctime_ns, size)：每轮扫描逐插件 stat，文件一变就重读。
+# 带上 ctime 是为了覆盖“内容改了但 mtime 被 rsync/touch 原样保留”的同步场景。
+# 这样不依赖安装/卸载回调，也不依赖跨进程广播（gunicorn 多 worker 各自失效）。
+_disk_cache: dict[str, _CachedPlugin] | None = None
 # DB 启停快照：None 表示本进程尚未成功刷新；frozenset() 表示已刷新且无启用项。
 _enabled_state: frozenset[str] | None = None
+# 与启停同批刷新的权限快照；_enabled_state 仍是启停唯一集合，
+# 这里只补充每个启用插件的 scope 与授权 username。
+_access_state: dict[str, tuple[str, frozenset[str]]] | None = None
 
 
 def clear_metadata_cache() -> None:
-    """清理磁盘内容缓存（安装/卸载后调用，让下一轮扫描看到新目录）。"""
+    """立即清空磁盘内容缓存（安装/卸载后调用，让目录增删马上生效）。
+
+    原地修改 ``plugin.json`` 不依赖本函数：下一轮扫描会按文件指纹自动重读。
+    """
     global _disk_cache
     _disk_cache = None
 
 
 async def refresh_plugin_state() -> None:
-    """从 DB 刷新插件启停快照。
+    """从 DB 刷新插件启停与人员权限快照。
 
     读失败即视为不可用：快照清空、当轮所有插件按禁用处理（fail-closed，不兜底旧值），
     并记录真实错误。调用方在会话装配、技能快照、管理端列表等入口先 await 本函数。
     """
-    global _enabled_state
+    global _access_state, _enabled_state
     try:
-        _enabled_state = frozenset(await PluginDao().list_enabled_names())
+        access = await PluginDao().list_enabled_access()
+        _enabled_state = frozenset(access)
+        _access_state = dict(access)
     except Exception as err:
-        logger.error("刷新插件启停状态失败，本轮所有插件按不可用处理: %s", err, exc_info=True)
+        logger.error("刷新插件启停与权限状态失败，本轮所有插件按不可用处理: %s", err, exc_info=True)
         _enabled_state = frozenset()
+        _access_state = {}
 
 
-def _scan_disk_plugins(*, force_refresh: bool = False) -> dict[str, tuple[PluginManifest, Path]]:
-    """扫描插件目录，返回 ``{插件名: (manifest, 目录)}``（带进程级磁盘缓存）。
+def _manifest_fingerprint(entry: Path) -> tuple[int, int, int]:
+    """``plugin.json`` 的文件指纹；缺失或不可读时返回哨兵值，交由解析层告警。"""
+    try:
+        stat = (entry / PLUGIN_MANIFEST_FILENAME).stat()
+    except OSError:
+        return (-1, -1, -1)
+    return (stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
 
-    单个插件 manifest 损坏、目录名与 manifest.name 不一致、或为符号链接，只告警跳过。
+
+def _scan_plugin_entry(entry: Path, cached: _CachedPlugin | None, *, force_refresh: bool) -> _CachedPlugin | None:
+    """扫描单个插件目录；返回缓存项，目录非法或 manifest 不可用时返回 ``None``。
+
+    ``plugin.json`` 指纹未变且未强制刷新时直接复用 ``cached``，否则重新解析。
+    """
+    if not entry.is_dir() or entry.is_symlink() or entry.name.startswith("."):
+        return None
+    fingerprint = _manifest_fingerprint(entry)
+    if not force_refresh and cached is not None and cached.dir == entry and cached.fingerprint == fingerprint:
+        return cached
+    try:
+        manifest = load_plugin_manifest(entry)
+    except PluginManifestError as err:
+        logger.warning("忽略非法插件 %s: %s", entry.name, err)
+        return None
+    if manifest.name != entry.name:
+        logger.warning(
+            "忽略目录名与 manifest.name 不一致的插件: dir=%s manifest=%s",
+            entry.name,
+            manifest.name,
+        )
+        return None
+    return _CachedPlugin(manifest=manifest, dir=entry, fingerprint=fingerprint)
+
+
+def _scan_disk_plugins(*, force_refresh: bool = False) -> dict[str, _CachedPlugin]:
+    """扫描插件目录，返回 ``{插件名: 缓存项}``。
+
+    ``plugin.json`` 的指纹未变时复用上一轮解析结果；文件被原地修改、
+    新增目录或删除目录都会在下一轮扫描生效。单个插件 manifest 损坏、目录名与
+    manifest.name 不一致、或为符号链接，只告警跳过。
     """
     global _disk_cache
-    if _disk_cache is not None and not force_refresh:
-        return _disk_cache
+    previous = _disk_cache or {}
+    found: dict[str, _CachedPlugin] = {}
     root = plugins_root()
-    found: dict[str, tuple[PluginManifest, Path]] = {}
     if root.is_dir():
         for entry in sorted(root.iterdir()):
-            if not entry.is_dir() or entry.is_symlink() or entry.name.startswith("."):
-                continue
-            try:
-                manifest = load_plugin_manifest(entry)
-            except PluginManifestError as err:
-                logger.warning("忽略非法插件 %s: %s", entry.name, err)
-                continue
-            if manifest.name != entry.name:
-                logger.warning(
-                    "忽略目录名与 manifest.name 不一致的插件: dir=%s manifest=%s",
-                    entry.name,
-                    manifest.name,
-                )
-                continue
-            found[manifest.name] = (manifest, entry)
+            scanned = _scan_plugin_entry(entry, previous.get(entry.name), force_refresh=force_refresh)
+            if scanned is not None:
+                found[scanned.manifest.name] = scanned
     _disk_cache = found
     return found
 
@@ -123,8 +168,8 @@ def load_plugins_metadata(*, force_refresh: bool = False) -> dict[str, PluginMet
     """
     enabled = _enabled_state if _enabled_state is not None else frozenset()
     return {
-        name: PluginMetadata(manifest=manifest, dir=directory, enabled=name in enabled)
-        for name, (manifest, directory) in _scan_disk_plugins(force_refresh=force_refresh).items()
+        name: PluginMetadata(manifest=cached.manifest, dir=cached.dir, enabled=name in enabled)
+        for name, cached in _scan_disk_plugins(force_refresh=force_refresh).items()
     }
 
 
@@ -133,10 +178,32 @@ def enabled_plugins() -> list[PluginMetadata]:
     return [item for item in load_plugins_metadata().values() if item.enabled]
 
 
-def enabled_plugin_skill_sources() -> list[tuple[str, Path]]:
-    """已启用插件声明的技能源 ``(技能名, 技能目录)``，供会话技能快照纳入。"""
+def _effective_access_state() -> dict[str, tuple[str, frozenset[str]]]:
+    """按启停集合读取权限元数据；测试或兼容直接设置 ``_enabled_state`` 时按全量可见。"""
+    cached = _access_state or {}
+    return {name: cached.get(name, ("all", frozenset())) for name in (_enabled_state or frozenset())}
+
+
+def _can_access_plugin(access: tuple[str, frozenset[str]], username: str) -> bool:
+    scope_type, authorized_user_names = access
+    if scope_type == "all":
+        return True
+    normalized_username = str(username or "").strip()
+    return bool(normalized_username and normalized_username in authorized_user_names)
+
+
+def is_plugin_visible_to_user(plugin_name: str, username: str = "") -> bool:
+    """判断插件对指定 username 是否可见；selected 在 username 为空时 fail-closed。"""
+    access = _effective_access_state().get(plugin_name)
+    if access is None:
+        return False
+    return _can_access_plugin(access, username)
+
+
+def _enabled_plugin_skill_sources(plugins: list[PluginMetadata]) -> list[tuple[str, Path]]:
+    """把给定插件声明的技能目录展开为 ``(技能名, 技能目录)``。"""
     sources: list[tuple[str, Path]] = []
-    for plugin in enabled_plugins():
+    for plugin in plugins:
         for skill_name in plugin.manifest.skills:
             skill_path = plugin.dir / "skills" / skill_name
             if not skill_path.is_dir() or skill_path.is_symlink():
@@ -149,8 +216,31 @@ def enabled_plugin_skill_sources() -> list[tuple[str, Path]]:
     return sources
 
 
+def enabled_plugin_skill_sources(username: str = "") -> list[tuple[str, Path]]:
+    """当前 username 可用的插件技能源；selected 插件按授权用户名过滤。"""
+    access_state = _access_state or {}
+    return _enabled_plugin_skill_sources(
+        [
+            plugin
+            for plugin in enabled_plugins()
+            if _can_access_plugin(
+                access_state.get(plugin.manifest.name, ("all", frozenset())),
+                username,
+            )
+        ]
+    )
+
+
+def enabled_plugin_skill_sources_for_admin() -> list[tuple[str, Path]]:
+    """管理端技能总览使用：返回全部已启用插件技能，不受当前管理员授权影响。"""
+    return _enabled_plugin_skill_sources(enabled_plugins())
+
+
 def enabled_plugin_mcp_servers() -> list[dict[str, Any]]:
-    """已启用插件声明的 MCP server 配置（原始 dict，交给 mcp/config.py 校验解析）。"""
+    """已启用插件声明的 MCP server 配置。
+
+    MCP 后续使用独立权限表；此处刻意不叠加插件人员权限，避免把两类授权耦合。
+    """
     entries: list[dict[str, Any]] = []
     for plugin in enabled_plugins():
         for entry in plugin.manifest.mcp_servers:
@@ -161,8 +251,11 @@ def enabled_plugin_mcp_servers() -> list[dict[str, Any]]:
 class PluginSkillSource:
     """把 plugins.loader 的现有函数适配成 SkillSourcePort。"""
 
-    def enabled_plugin_skill_sources(self) -> list[tuple[str, Path]]:
-        return enabled_plugin_skill_sources()
+    def enabled_plugin_skill_sources(self, username: str = "") -> list[tuple[str, Path]]:
+        return enabled_plugin_skill_sources(username)
+
+    def enabled_plugin_skill_sources_for_admin(self) -> list[tuple[str, Path]]:
+        return enabled_plugin_skill_sources_for_admin()
 
     async def refresh_plugin_state(self) -> None:
         await refresh_plugin_state()
@@ -184,7 +277,9 @@ __all__ = [
     "clear_metadata_cache",
     "enabled_plugin_mcp_servers",
     "enabled_plugin_skill_sources",
+    "enabled_plugin_skill_sources_for_admin",
     "enabled_plugins",
+    "is_plugin_visible_to_user",
     "load_plugins_metadata",
     "plugin_dir",
     "plugins_root",

@@ -22,12 +22,14 @@ import ChatDataAdminManager from '../ChatDataAdminManager.vue'
 const panelMocks = vi.hoisted(() => ({
   datasource: {},
   dataset: { ensureLoaded: vi.fn() },
+  pipeline: {},
   semantic: {},
   enum: { ensureLoaded: vi.fn() },
   ontology: { ensureLoaded: vi.fn() },
   sqlHistory: { ensureLoaded: vi.fn() },
   schedule: { ensureLoaded: vi.fn() },
   plugins: { ensureLoaded: vi.fn() },
+  skills: { ensureLoaded: vi.fn() },
   models: { ensureLoaded: vi.fn() },
   setting: { ensureLoaded: vi.fn() },
 }))
@@ -50,12 +52,14 @@ const mountManager = () =>
         'el-button': { template: '<button type="button" @click="$emit(\'click\')"><slot /></button>' },
         DataSourceManager: panelStub('DataSourceManager', 'datasource'),
         DatasetAdminPanel: panelStub('DatasetAdminPanel', 'dataset'),
+        PipelineAdminPanel: panelStub('PipelineAdminPanel', 'pipeline'),
         SemanticModelAdminPanel: panelStub('SemanticModelAdminPanel', 'semantic'),
         GlobalEnumAdminPanel: panelStub('GlobalEnumAdminPanel', 'enum'),
         OntologyAdminPanel: panelStub('OntologyAdminPanel', 'ontology'),
         GlobalSqlHistory: panelStub('GlobalSqlHistory', 'sqlHistory'),
         AgentScheduleAdminPanel: panelStub('AgentScheduleAdminPanel', 'schedule'),
         PluginAdminPanel: panelStub('PluginAdminPanel', 'plugins'),
+        SkillAdminPanel: panelStub('SkillAdminPanel', 'skills'),
         ModelAdminPanel: panelStub('ModelAdminPanel', 'models'),
         SettingAdminPanel: panelStub('SettingAdminPanel', 'setting'),
       },
@@ -80,7 +84,7 @@ describe('ChatDataAdminManager 分组导航', () => {
   it('左侧按数据资产/语义层/业务本体/智能体/系统分组', () => {
     const wrapper = mountManager()
     const text = wrapper.text()
-    for (const label of ['数据资产', '数据源管理', '模型管理', '语义层', '枚举值', '业务本体', '本体', '数据血缘', '智能体', '定时任务', '插件管理', '系统', '大模型管理', '运行配置', '历史 SQL']) {
+    for (const label of ['数据资产', '数据源管理', '数据集', 'Pipeline', '数据血缘', '语义层', '语义模型管理', '枚举值', '业务本体', '本体', '智能体', '大模型管理', '定时任务', '插件管理', '技能管理', '系统', '运行配置', '历史 SQL']) {
       expect(text).toContain(label)
     }
     expect(text).not.toContain('元数据')
@@ -91,7 +95,7 @@ describe('ChatDataAdminManager 分组导航', () => {
   it('默认激活数据源管理，其余面板隐藏；新建按钮属于数据源面板而非弹窗头部', () => {
     const wrapper = mountManager()
     expect(isPanelVisible(wrapper, 'datasource')).toBe(true)
-    for (const panel of ['semantic', 'enum', 'ontology', 'sqlHistory', 'schedule', 'plugins', 'models', 'setting']) {
+    for (const panel of ['dataset', 'pipeline', 'semantic', 'enum', 'ontology', 'sqlHistory', 'schedule', 'plugins', 'skills', 'models', 'setting']) {
       expect(isPanelVisible(wrapper, panel)).toBe(false)
     }
     expect(wrapper.findAll('button').some(b => b.text().includes('新建'))).toBe(false)
@@ -115,6 +119,16 @@ describe('ChatDataAdminManager 分组导航', () => {
     expect(isPanelVisible(wrapper, 'models')).toBe(true)
     expect(panelMocks.models.ensureLoaded).toHaveBeenCalledTimes(1)
     expect(panelMocks.enum.ensureLoaded).not.toHaveBeenCalled()
+  })
+
+  it('点击技能管理切换面板并触发懒加载', async () => {
+    const wrapper = mountManager()
+    await navButton(wrapper, '技能管理').trigger('click')
+    await flushPromises()
+
+    expect(isPanelVisible(wrapper, 'skills')).toBe(true)
+    expect(panelMocks.skills.ensureLoaded).toHaveBeenCalledTimes(1)
+    expect(panelMocks.plugins.ensureLoaded).not.toHaveBeenCalled()
   })
 
   it('禁用项（数据血缘）只提示不切换', async () => {

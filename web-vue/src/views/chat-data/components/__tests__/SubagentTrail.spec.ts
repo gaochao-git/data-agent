@@ -16,19 +16,26 @@ const MessageItemStub = {
     'executionTargets',
     'onSave',
     'liveGenerationSpeed',
+    'liveSupersteps',
+    'liveSuperstepLimit',
     'liveElapsedMs',
+    'streamingCancellable',
+    'streamingCancelling',
     'resolveToolCall',
   ],
-  emits: ['selectTool', 'openAttachment'],
+  emits: ['selectTool', 'openAttachment', 'cancelStreaming'],
   template: '<div class="message-item-stub" :data-role="message.role" :data-id="message.id"></div>',
 }
 
-const stubs = { MessageItem: MessageItemStub }
+const stubs = {
+  MessageItem: MessageItemStub,
+  ElTooltip: { template: '<div><slot /><slot name="content" /></div>' },
+}
 
 const taskCall = (trail: SubagentTrailItem[], status: ToolCallInfo['status'] = 'running'): ToolCallInfo => ({
   tool_call_id: 'call-task',
-  tool_name: 'task',
-  args: { description: '盘点语义模型中的指标与维度', subagent_type: 'explore' },
+  tool_name: 'subagent',
+  args: { dispatch: { description: '盘点语义模型中的指标与维度', subagent_type: 'explore' } },
   status,
   subagentTrail: trail,
 })
@@ -39,6 +46,27 @@ const mountTrail = (toolCall: ToolCallInfo, extraProps: Record<string, unknown> 
 })
 
 describe('SubagentTrail（右侧聊天式完整过程）', () => {
+  it('运行中透出实时步数，完成后 footer 展示本次派发步数', () => {
+    const trail: SubagentTrailItem[] = [
+      { kind: 'message', id: 'msg-1', content: '先看目录', thinking: '思考一' },
+      { kind: 'message', id: 'msg-2', content: '结论：已盘点' },
+    ]
+
+    const running = mountTrail(taskCall(trail), {
+      timingRunning: true,
+      liveSupersteps: 5,
+      recursionLimit: 1000,
+    })
+    expect(running.findComponent(MessageItemStub).props('liveSupersteps')).toBe(5)
+    expect(running.findComponent(MessageItemStub).props('liveSuperstepLimit')).toBe(1000)
+
+    const completed = mountTrail(taskCall(trail, 'completed'), {
+      supersteps: 23,
+      recursionLimit: 1000,
+    })
+    expect(completed.find('[data-message-steps]').text()).toContain('23 / 1000 步')
+  })
+
   it('过程投影成主对话消息，直接复用 MessageItem：任务书 user + 子智能体 assistant', () => {
     const wrapper = mountTrail(taskCall([
       { kind: 'message', id: 'msg-1', content: '先看目录', thinking: '思考一' },
@@ -62,6 +90,48 @@ describe('SubagentTrail（右侧聊天式完整过程）', () => {
       expect(item.props('showFooter')).toBe(false)
       expect(typeof item.props('shouldInlineRenderResult')).toBe('function')
     }
+  })
+
+  it('查询结果保存能力与主对话一致：数据源、执行目标和保存回调透传到消息组件', () => {
+    const onSave = () => {}
+    const executionTargets = [{ member_datasource_id: 'target-1', label: '默认执行机构' }]
+    const wrapper = mountTrail(taskCall([
+      { kind: 'message', id: 'msg-1', content: '结论：已盘点' },
+    ], 'completed'), {
+      datasourceId: 'ds-1',
+      executionTargets,
+      onSave,
+    })
+
+    const assistant = wrapper.findAllComponents(MessageItemStub)[1]!
+    expect(assistant.props('datasourceId')).toBe('ds-1')
+    expect(assistant.props('executionTargets')).toEqual(executionTargets)
+    expect(assistant.props('onSave')).toBe(onSave)
+  })
+
+  it('用户与助手气泡带任务起止时间，与主对话一致', () => {
+    const completed = mountTrail({
+      ...taskCall([{ kind: 'message', id: 'msg-1', content: '结论：已完成' }], 'completed'),
+      started_at_ms: Date.parse('2026-11-15T10:00:00'),
+      ended_at_ms: Date.parse('2026-11-15T10:02:30'),
+    })
+    const items = completed.findAllComponents(MessageItemStub)
+    expect(items[0]!.props('message').timestamp).toEqual(new Date('2026-11-15T10:00:00'))
+    expect(items[1]!.props('message').timestamp).toEqual(new Date('2026-11-15T10:02:30'))
+    // footer 复用主对话 MessageFooter（复制 + 用时 + tokens + 时间），仅隐藏 AI 声明
+    expect(items.map(item => item.props('showFooter'))).toEqual([false, false])
+    expect(completed.find('[data-message-footer]').exists()).toBe(true)
+    expect(completed.find('[data-message-timestamp]').text()).toContain('2026-11-15')
+
+    // 运行中只给用户气泡派发时间，助手气泡等收口后再出 footer
+    const running = mountTrail({
+      ...taskCall([{ kind: 'message', id: 'msg-1', content: '过程' }], 'running'),
+      started_at_ms: Date.parse('2026-11-15T10:00:00'),
+    })
+    const runningItems = running.findAllComponents(MessageItemStub)
+    expect(runningItems[0]!.props('message').timestamp).toEqual(new Date('2026-11-15T10:00:00'))
+    expect(runningItems[1]!.props('message').timestamp).toBeUndefined()
+    expect(runningItems[1]!.props('showFooter')).toBe(false)
   })
 
   it('内层工具再次选中：由 MessageItem 上抛 selectTool', () => {
@@ -107,15 +177,58 @@ describe('SubagentTrail（右侧聊天式完整过程）', () => {
   it('已用时与主对话一致：运行中进助手状态行，完成后在气泡下方显示用时', () => {
     const running = mountTrail(taskCall([
       { kind: 'message', id: 'msg-1', content: '过程', thinking: '思考' },
-    ], 'running'), { elapsedMs: 5_000, timingRunning: true })
+    ], 'running'), {
+      elapsedMs: 5_000,
+      timingRunning: true,
+      liveSpeed: 25,
+      tokenUsage: {
+        input_tokens: 1_200,
+        output_tokens: 120,
+      },
+    })
     expect(running.findAllComponents(MessageItemStub)[1]!.props('liveElapsedMs')).toBe(5_000)
-    expect(running.find('[data-subagent-duration]').exists()).toBe(false)
+    expect(running.findAllComponents(MessageItemStub)[1]!.props('liveGenerationSpeed')).toBe(25)
+    expect(running.find('[data-message-duration]').exists()).toBe(false)
 
     const finished = mountTrail(taskCall([
       { kind: 'message', id: 'msg-1', content: '结论：已完成' },
     ], 'completed'), { elapsedMs: 90_000, timingRunning: false })
     expect(finished.findAllComponents(MessageItemStub)[1]!.props('liveElapsedMs')).toBeNull()
-    expect(finished.find('[data-subagent-duration]').text()).toContain('用时 1 分 30 秒')
+    expect(finished.find('[data-message-footer]').exists()).toBe(true)
+    expect(finished.find('[data-message-copy]').exists()).toBe(true)
+    expect(finished.find('[data-message-duration]').text()).toContain('用时 1 分 30 秒')
+  })
+
+  it('运行中消息流状态行可取消，取消事件上抛', async () => {
+    const wrapper = mount(SubagentTrail, {
+      props: {
+        toolCall: taskCall([{ kind: 'message', id: 'msg-1', content: '过程', thinking: '思考中' }], 'running'),
+        conversationId: 'conv-1',
+        elapsedMs: 5_000,
+        timingRunning: true,
+        cancellable: true,
+      },
+      global: {
+        stubs: {
+          MarkdownBlock: { props: ['content'], template: '<div>{{ content }}</div>' },
+          ThinkingBlock: true,
+          ToolCallList: true,
+          QueryResultPanel: true,
+          WaitingTip: true,
+        },
+      },
+    })
+
+    const button = wrapper.find('[data-subagent-stream-cancel]')
+    expect(button.exists()).toBe(true)
+    expect(button.text()).toContain('取消')
+
+    await button.trigger('click')
+    expect(wrapper.emitted('cancel')).toHaveLength(1)
+
+    await wrapper.setProps({ cancelling: true })
+    expect(wrapper.find('[data-subagent-stream-cancel]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-subagent-stream-cancel]').text()).toContain('取消中')
   })
 
   it('完成态在用量行展示子智能体 token 用量', () => {
@@ -126,8 +239,36 @@ describe('SubagentTrail（右侧聊天式完整过程）', () => {
       timingRunning: false,
       tokenUsage: { input_tokens: 12_345, output_tokens: 678, cache_read_input_tokens: 4_000 },
     })
-    const tokens = wrapper.find('[data-subagent-tokens]')
-    expect(tokens.text()).toBe('tokens 输入 12.3k · 输出 678 · 缓存命中 32%')
+    const tokens = wrapper.find('[data-message-tokens]')
+    expect(tokens.text()).toContain('-- tok/s')
+    expect(tokens.find('.fa-bolt').exists()).toBe(true)
+    expect(tokens.find('.fa-coins').exists()).toBe(false)
+    expect(tokens.find('.fa-circle-info').exists()).toBe(false)
+    expect(tokens.attributes('aria-label')).toBe('tokens 输入 12.3k · 输出 678 · 缓存命中 32.4%')
+    const footer = wrapper.find('[data-message-footer]').element
+    const tokensElement = tokens.element
+    const durationElement = wrapper.find('[data-message-duration]').element
+    expect(tokensElement.compareDocumentPosition(durationElement) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(footer).toBeTruthy()
+  })
+
+  it('有模型调用速率时与主对话一样显示 tok/s', () => {
+    const wrapper = mountTrail(taskCall([
+      { kind: 'message', id: 'msg-1', content: '结论' },
+    ], 'completed'), {
+      elapsedMs: 90_000,
+      timingRunning: false,
+      tokenUsage: {
+        model: 'SenseNova-Loop-9B-MLX-6bit',
+        input_tokens: 19_600,
+        output_tokens: 450,
+        cache_read_input_tokens: 18_600,
+        tokens_per_second: 7,
+      },
+    })
+
+    expect(wrapper.find('[data-message-speed]').text()).toContain('7 tok/s')
+    expect(wrapper.find('[data-message-tokens]').exists()).toBe(false)
   })
 
   it('完成态默认收起工作过程，只留最终报告（与主对话口径一致）', () => {
@@ -155,6 +296,27 @@ describe('SubagentTrail（右侧聊天式完整过程）', () => {
     expect(processButton.attributes('aria-expanded')).toBe('false')
     expect(wrapper.text()).toContain('结论：已盘点')
     expect(wrapper.find('.thinking-block').exists()).toBe(false)
+  })
+
+  it('showWithoutTrail：无过程 trail 的后台任务也走主对话气泡（任务书 + 报告）', () => {
+    const toolCall = { ...taskCall([], 'completed'), result: '完整报告正文' }
+    const wrapper = mount(SubagentTrail, {
+      props: { toolCall, conversationId: 'conv-1', showWithoutTrail: true },
+      global: {
+        stubs: {
+          MarkdownBlock: { props: ['content'], template: '<div class="conversation-markdown">{{ content }}</div>' },
+          ThinkingBlock: true,
+          ToolCallList: true,
+          QueryResultPanel: true,
+          WaitingTip: true,
+        },
+      },
+    })
+
+    expect(wrapper.findAll('[data-assistant-bubble]')).toHaveLength(1)
+    expect(wrapper.text()).toContain('盘点语义模型中的指标与维度')
+    expect(wrapper.text()).toContain('完整报告正文')
+    expect(wrapper.text()).not.toContain('工作过程')
   })
 
   it('非 task 调用 / 无 trail 时不渲染过程区', () => {

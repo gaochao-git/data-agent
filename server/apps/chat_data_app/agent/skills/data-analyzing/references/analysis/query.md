@@ -41,10 +41,10 @@
 
 本体层按对象类型持续逐步建设，**任何会话都可能没有本体清单**：指标语义层必然存在，本体层是可选增强，缺失时完全按原有指标语义层路线继续，不得报错、重试或向用户提及缺失。
 
-1. 先用 `file_read` 读取 `/mnt/user-data/workspace/semantic/_ontology_catalog.yaml`。文件不存在：当前会话未物化本体层（此时 semantic/ 下会有 `_semantic_catalog.yaml` 语义清单文件），直接进入「3. 检索指标语义层」，不要重试或猜测路径。两份清单二选一：本体清单存在时不发语义清单文件，**`_semantic_catalog.yaml` 缺失属正常**；本体清单的 `models` 段是全部启用模型索引（含未建本体对象类型、不在 `object_types` 中的模型），用它的 `file` 定位取数模型即可。
+1. 先用 `file_read` 读取 `/mnt/user-data/workspace/.system/semantic/_ontology_catalog.yaml`。文件不存在：当前会话未物化本体层（此时同目录下会有 `_semantic_catalog.yaml` 语义清单文件），直接进入「3. 检索指标语义层」，不要重试或猜测路径。两份清单二选一：本体清单存在时不发语义清单文件，**`_semantic_catalog.yaml` 缺失属正常**；本体清单的 `models` 段是全部启用模型索引（含未建本体对象类型、不在 `object_types` 中的模型），用它的 `file` 定位取数模型即可。
 2. 清单存在时，识别与用户问题相关的业务对象类型。**优先调 `ontology_tool` 的 `list_object_types`（无参数）**：返回轻量对象类型清单（对象类型API名/显示名/描述 + 各自绑定模型及快照文件名），一次调用同时完成「列对象类型」与「对象类型→模型」两跳；工具未注册（未启用开关）时回落清单检索。锁定模型后再按需升级 `locate_object_type`（见下）。直接读清单时：
-   - 清单可能带 `truncated: true`：此时 `object_types` 只包含按对象类型名排序的前一部分，不能据此判定「没有相关对象类型」；先用 `file_grep` 在 `/mnt/user-data/workspace/semantic/` 下按对象类型名/业务关键词检索，找不到再走「3. 检索指标语义层」。
-   - 命中对象类型：按该对象类型 `mappings` 的 `file` 字段（取数模型快照文件名，semantic/ 下）定位模型并 `file_read`（`semantic_config_id` 为辅助键；`column_mappings` 是「属性 → 模型维度名」的概念映射，物理列以模型 YAML 为准）；涉及多个对象类型时，用 `relation_types` 的 `from`/`to` 对象类型与 `from_columns`/`to_columns` 推导 join 路径，锁定候选后直接进入「4. 精读完整语义层」。
+   - 清单可能带 `truncated: true`：此时 `object_types` 只包含按对象类型名排序的前一部分，不能据此判定「没有相关对象类型」；先用 `file_grep` 在 `/mnt/user-data/workspace/.system/semantic/` 下按对象类型名/业务关键词检索，找不到再走「3. 检索指标语义层」。
+   - 命中对象类型：按该对象类型 `mappings` 的 `file` 字段（取数模型快照文件名，位于 `.system/semantic/`）定位模型并 `file_read`（`semantic_config_id` 为辅助键；`column_mappings` 是「属性 → 模型维度名」的概念映射，物理列以模型 YAML 为准）；涉及多个对象类型时，用 `relation_types` 的 `from`/`to` 对象类型与 `from_columns`/`to_columns` 推导 join 路径，锁定候选后直接进入「4. 精读完整语义层」。
    - 命中对象类型、但拿不准「对象类型在哪个模型/属性对应哪个维度」或需要对象类型间关系类型、失修状态时，调用 `ontology_tool` 的 `locate_object_type`（`object_types` 传对象类型 API 名列表，可多个）：返回绑定模型（含快照文件名）、属性→维度对照与对象类型间关系类型，据此直接进入「4. 精读完整语义层」或 `execute_query`，不要靠 grep 模型文件猜定位；工具报错（范围）或未注册（未启用开关）时，才回落本文件既有检索路径。
    - **已知具体对象主键时**调用 `ontology_tool` 的 `get_object`（`object_type` + `object_key`）：返回对象属性与一跳 `links`（`relation`/`direction`/`related_object_type`/`related_object_key`）；`links` 是对端对象引用，需要对端属性时用对端 key 再次 `get_object`。
    - **对象实例与对象属性聚合优先走本体**：按关键词/属性找对象实例用 `find_objects`；对象类型已覆盖且问题是对象属性的数量/分布/求和/均值/最值时，用 `aggregate_objects`（`group_by` 属性 + `count/count_distinct/sum/avg/min/max`）。只有业务指标、计算字段、跨模型复杂分析等对象层无法表达的语义计算，才走 `data_analyzing_tool` 的 `execute_query`；不要因为语义模型没有预置指标就把对象聚合退回 SQL。
@@ -56,9 +56,9 @@
 
 ### 3. 检索指标语义层（清单优先，grep 过滤）
 
-1. 当前用户可见（当前数据源组）的全部启用语义模型 Ossie YAML 已预物化到会话工作区 `/mnt/user-data/workspace/semantic/`，文件名为 `{模型名}__{id后缀}.yaml`；同目录的 `_semantic_catalog.yaml` 是系统生成的语义清单文件（每个启用模型一条 file/description/business_notes，file 即快照文件名）。**本体清单接管时 `_semantic_catalog.yaml` 不存在属正常**：此时用 `_ontology_catalog.yaml` 的 `models` 段取全部启用模型的 file/description/business_notes（`object_types` 只是已建本体对象类型的子集，可能覆盖不全）。
+1. 当前用户可见（当前数据源组）的全部启用语义模型 Ossie YAML 已预物化到会话工作区 `/mnt/user-data/workspace/.system/semantic/`，文件名为 `{模型名}__{id后缀}.yaml`；同目录的 `_semantic_catalog.yaml` 是系统生成的语义清单文件（每个启用模型一条 file/description/business_notes，file 即快照文件名）。**本体清单接管时 `_semantic_catalog.yaml` 不存在属正常**：此时用 `_ontology_catalog.yaml` 的 `models` 段取全部启用模型的 file/description/business_notes（`object_types` 只是已建本体对象类型的子集，可能覆盖不全）。
 2. **第一步读清单**（本文档所称「清单」专指上文两个索引 YAML 文件本身，读取动作一律是 `file_read` 读取文件路径，**不是列目录文件名**）：`file_read` 整读 `_semantic_catalog.yaml`（本体清单接管时读其 `models` 段），得到全部启用模型的 file/description/business_notes 清单，按描述与用户问题的匹配度缩小候选模型。仅凭文件名判断模型相关性属于猜测——文件名不含 description/business_notes；也不要跳过清单直接 grep 全目录——先看全景清单才知道系统里有什么、避免关键词盲区。
-3. 清单描述不足以确认字段与口径时，用 `file_grep(path="/mnt/user-data/workspace/semantic/", pattern="<指标名|维度名|业务关键词>")` 过滤关心内容：候选明确时用 `glob` 限定候选模型文件，候选不明时再扫全目录；英文关键词加 `ignore_case=true` 一次覆盖大小写变体；宽泛关键词命中过多（返回 `has_more=true`）时，先用 `output_mode="files_with_matches"` 看哪些文件命中、必要时再用 `output_mode="count"` 看热点分布，最后收敛 `pattern`/`glob` 后取默认 content 看具体行。
+3. 清单描述不足以确认字段与口径时，用 `file_grep(path="/mnt/user-data/workspace/.system/semantic/", pattern="<指标名|维度名|业务关键词>")` 过滤关心内容：候选明确时用 `glob` 限定候选模型文件，候选不明时再扫全目录；英文关键词加 `ignore_case=true` 一次覆盖大小写变体；宽泛关键词命中过多（返回 `has_more=true`）时，先用 `output_mode="files_with_matches"` 看哪些文件命中、必要时再用 `output_mode="count"` 看热点分布，最后收敛 `pattern`/`glob` 后取默认 content 看具体行。
 4. 同一关键词无命中时，先换词再判无：至少覆盖三类换法——业务同义词（如“入金/来账/收款”）、中英文对照、词组拆分；三类换法全部落空才判定为「确认无命中」。
 5. 一旦确认无命中，就是当前语义清单不含该术语：立即停止检索，用业务语言说明当前缺少的指标或模型并向用户澄清，不得用相同或相近关键词重复检索。**禁止为找模型逐个读取清单里的 YAML**——逐个读取不是检索手段，清单覆盖的模型很多时会耗尽上下文，且读不到关键词一样无解。
 6. 手动选择的模型只是优先参考，不代表锁定。
@@ -254,10 +254,11 @@ DSL 时间分组始终使用：
 
 ## 多步分析与结果处理
 
-- 查询成功后系统始终将完整结果保存到当前会话 `outputs/query_result/<result_id>.json`，工具只返回状态、行数/执行耗时、`result_id` 和 `result_path`，不把明细放入模型上下文。前端按 `result_id` 展示，后续分析使用 `file_read` 读取工具返回的 `result_path`。
+- 查询成功后系统始终将完整结果保存到当前会话 `workspace/.system/query_result/<result_id>.json`，工具只返回状态、行数/执行耗时、`result_id` 和 `result_path`，不把明细放入模型上下文。前端按 `result_id` 展示，后续分析使用 `file_read` 读取工具返回的 `result_path`。
 - 同比和环比分别查询当前周期与对比周期的基础数据，按周期对齐后调用 `calculator_tool` 计算差值、增长率或比例；对比值为 0 或为空时不能输出普通百分比。
 - 多个独立查询分别执行，最后统一总结；中间过程不必输出完整原始数据。
 - 用户只要求查询、查看或列出结果时，不读取结果文件；前端会按 `result_id` 展示完整结果，直接说明查询已完成，不要再次粘贴表格、逐行明细、完整 JSON 或原始 SQL。
+- 大数据量的时间趋势分析，建议先用 `data2image` 转成折线图观察趋势；发现异常点后，再针对异常区间查询小范围数据核实，不要在全量结果上逐行读取。
 - 回答具体数值、形成业务结论，或进行比较、计算、排名、异常判断、空结果及执行对象状态判断时，必须先读取 `result_path` 中的实际数据；不得依据状态、SQL、路径、行数或 preview 推断。
 - 结果较大时，先读取最小范围确认结构和规模；聚合、筛选、排序或计算优先重新执行更小的 DSL/SQL。只有必须检查原始明细时才按 `offset`/`limit` 分页读取，禁止为了分析把大型结果逐页全部加载进模型上下文。
 - 读取实际结果后，空结果、失败结果和部分执行对象失败必须如实说明，不编造原因或数字。

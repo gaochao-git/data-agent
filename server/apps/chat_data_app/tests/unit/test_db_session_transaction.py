@@ -46,6 +46,22 @@ def _patch_fake_session(monkeypatch) -> FakeSession:
     return session
 
 
+def _patch_session_sequence(monkeypatch, sessions: list[FakeSession]) -> None:
+    queue = iter(sessions)
+
+    def factory():
+        session = next(queue)
+
+        @asynccontextmanager
+        async def session_cm():
+            yield session
+
+        return session_cm()
+
+    monkeypatch.setattr(database, "get_session_factory", lambda: factory)
+    monkeypatch.setattr(database, "_endpoint_selector", SimpleNamespace(current=lambda: None))
+
+
 def test_transaction_scope_reuses_one_session_and_commits_once(monkeypatch):
     session = _patch_fake_session(monkeypatch)
 
@@ -87,6 +103,26 @@ def test_transaction_rejects_concurrent_child_task_session_use(monkeypatch):
 
     with pytest.raises(RuntimeError, match="事务内禁止并发使用同一数据库会话"):
         asyncio.run(scenario())
+
+
+def test_isolated_session_bypasses_transaction_binding(monkeypatch):
+    outer = FakeSession()
+    isolated = FakeSession()
+    _patch_session_sequence(monkeypatch, [outer, isolated])
+
+    async def scenario():
+        async with dao_session.transaction_scope() as tx:
+            assert tx is outer
+            async with database.get_isolated_session() as independent:
+                assert independent is isolated
+                async with database.get_session() as nested:
+                    assert nested is independent
+            assert database.get_active_session() is tx
+
+    asyncio.run(scenario())
+    assert outer.commits == 1
+    assert isolated.commits == 1
+    assert database.get_active_session() is None
 
 
 def test_transaction_rolls_back_and_clears_context_on_error(monkeypatch):

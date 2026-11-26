@@ -37,12 +37,16 @@ class SkillDao:
             ),
         )
 
-    def _skill_base_filters(self, user_id: str, include_disabled: bool = True) -> list[ColumnElement[bool]]:
+    def _skill_base_filters(
+        self, user_id: str, include_disabled: bool = True, all_users: bool = False
+    ) -> list[ColumnElement[bool]]:
+        """``all_users=True`` 仅用于管理端只读总览：跳过个人可见性过滤，含私有/停用。"""
         filters = [
             ChatDataSkill.delete_flag == 0,
             ChatDataSkill.skill_source == "user",
-            self._skill_visible_filter(user_id),
         ]
+        if not all_users:
+            filters.append(self._skill_visible_filter(user_id))
         if not include_disabled:
             filters.extend(
                 [
@@ -92,7 +96,7 @@ class SkillDao:
             "update_by_name": row.update_by_name,
         }
 
-    def _skill_select(self, user_id: str, include_disabled: bool) -> Select[tuple[Any, ...]]:
+    def _skill_select(self, user_id: str, include_disabled: bool, all_users: bool = False) -> Select[tuple[Any, ...]]:
         draft_subquery = (
             select(func.max(ChatDataSkillVersion.skill_version_no))
             .where(
@@ -116,7 +120,7 @@ class SkillDao:
                     ChatDataSkillFavorite.delete_flag == 0,
                 ),
             )
-            .where(*self._skill_base_filters(user_id, include_disabled=include_disabled))
+            .where(*self._skill_base_filters(user_id, include_disabled=include_disabled, all_users=all_users))
         )
         return stmt
 
@@ -145,6 +149,34 @@ class SkillDao:
                 return None
             row, draft_no, favorite_id = item
             return self._skill_row_to_dict(row, draft_skill_version_no=draft_no, favorite_flag=1 if favorite_id else 0)
+
+    async def list_all_skills_async(self) -> list[dict[str, Any]]:
+        """管理端只读总览：全部用户技能（跨用户、含私有/停用/草稿），不做可见性过滤。"""
+        stmt = self._skill_select("", include_disabled=True, all_users=True).order_by(ChatDataSkill.update_time.desc())
+        async with get_session() as db:
+            result = await db.execute(stmt)
+            return [
+                self._skill_row_to_dict(row, draft_skill_version_no=draft_no, favorite_flag=0)
+                for row, draft_no, _favorite_id in result.all()
+            ]
+
+    async def get_skill_for_admin_async(self, skill_id_or_name: str) -> dict[str, Any] | None:
+        """管理端跨用户按 ID/名称解析技能行，用于取得真实属主后复用只读链路。"""
+        value = str(skill_id_or_name or "").strip()
+        if not value:
+            return None
+        stmt = (
+            self._skill_select("", include_disabled=True, all_users=True)
+            .where(or_(ChatDataSkill.skill_id == value, ChatDataSkill.skill_name == value))
+            .limit(1)
+        )
+        async with get_session() as db:
+            result = await db.execute(stmt)
+            item = result.first()
+            if not item:
+                return None
+            row, draft_no, _favorite_id = item
+            return self._skill_row_to_dict(row, draft_skill_version_no=draft_no, favorite_flag=0)
 
     async def skill_name_exists_async(self, skill_name: str) -> bool:
         """全局检查技能名称是否被占用（含已删除、他人私有记录），用于创建前友好报错。"""

@@ -22,9 +22,9 @@ from utils import alarm as alarm_module
 
 def _request(conversation_id="conv-1", user_id="u-1", tool_name="run_sql"):
     return SimpleNamespace(
-        state={"conversation_id": conversation_id, "user_id": user_id},
+        state={"conversation_id": conversation_id},
         tool_call={"id": "call-1", "name": tool_name, "args": {}},
-        runtime=None,
+        runtime=SimpleNamespace(context={"user_id": user_id}),
     )
 
 

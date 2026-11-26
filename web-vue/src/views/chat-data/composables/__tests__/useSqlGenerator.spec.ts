@@ -76,6 +76,53 @@ describe('useSqlGenerator', () => {
     expect(onRunCompleted).toHaveBeenCalledWith({ status: 'finished', nextRunId: 'run-next' })
   })
 
+  it('dispatches conversation title metadata without treating it as chat content', async () => {
+    const onMessage = vi.fn()
+    const onConversationTitleUpdated = vi.fn()
+    const { generateSqlStream } = useSqlGenerator()
+    await generateSqlStream('1+1', true, null, conversationId, {
+      mode: 'query',
+      agentId: 'chat_data',
+      onMessage,
+      onConversationTitleUpdated,
+      responseFactory: async () => streamResponse([
+        'event: conversation_title_updated\ndata: {"conversation_id":"conversation-1","title":"支付案件分析"}\n\n',
+        'event: message\ndata: {"content":"2"}\n\n',
+        'event: done\ndata: {"status":"finished"}\n\n',
+      ]),
+    })
+
+    expect(onConversationTitleUpdated).toHaveBeenCalledWith({
+      conversation_id: 'conversation-1',
+      title: '支付案件分析',
+    })
+    expect(onMessage).toHaveBeenCalledWith({ content: '2' })
+  })
+
+  it('dispatches subagent task snapshots without treating them as chat content', async () => {
+    const onMessage = vi.fn()
+    const onSubagentTaskUpdated = vi.fn()
+    const { generateSqlStream } = useSqlGenerator()
+    await generateSqlStream('1+1', true, null, conversationId, {
+      mode: 'query',
+      agentId: 'chat_data',
+      onMessage,
+      onSubagentTaskUpdated,
+      responseFactory: async () => streamResponse([
+        'event: subagent_task_updated\ndata: {"task":{"task_id":"t1","conversation_id":"conversation-1","status":"running","progress":{"last_tool":"file_read"}}}\n\n',
+        'event: done\ndata: {"status":"finished"}\n\n',
+      ]),
+    })
+
+    expect(onSubagentTaskUpdated).toHaveBeenCalledWith({
+      task_id: 't1',
+      conversation_id: 'conversation-1',
+      status: 'running',
+      progress: { last_tool: 'file_read' },
+    })
+    expect(onMessage).not.toHaveBeenCalled()
+  })
+
   it('keeps reading until structured done after an error event', async () => {
     const onResult = vi.fn()
     const onError = vi.fn()

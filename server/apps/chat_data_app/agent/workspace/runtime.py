@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import os
 import re
@@ -31,9 +32,17 @@ from apps.chat_data_app.agent.workspace.runtime_skill_snapshot import (
 )
 from utils.logger import get_logger
 from utils.skill_paths import SKILLS_VIRTUAL_ROOT, resolve_skill_snapshot_path, runtime_skill_visible_root
-from utils.storage_paths import CHAT_DATA_HOME, assert_workspace_root, conversation_thread_dir
+from utils.storage_paths import (
+    CHAT_DATA_HOME,
+    assert_workspace_root,
+    conversation_semantic_dir_from_workspace,
+    conversation_thread_dir,
+    semantic_cache_dir,
+    write_semantic_cache_ref,
+)
 from utils.tool_result_store import QUERY_RESULT_DIR_NAME, TOOL_OFFLOAD_DIR_NAME
 from utils.upload_storage_crypto import materialize_plaintext, original_upload_path
+from utils.workspace_system_paths import SEMANTIC_DIR_NAME, SEMANTIC_VIRTUAL_ROOT, SYSTEM_DIR_NAME
 
 from .artifact_registry import parse_output_artifact
 from .office_preview_html import normalize_office_preview_html
@@ -75,6 +84,14 @@ class WorkspaceBackend(Protocol):
         file_path: str,
         content: str,
         mode: str,
+    ) -> dict[str, Any]: ...
+
+    async def write_binary_file(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        file_path: str,
+        data: bytes,
     ) -> dict[str, Any]: ...
 
     async def replace_text_file(
@@ -188,9 +205,12 @@ class ConversationWorkspaceRuntime:
     workspace_root: str
     user_id: str
     backend: WorkspaceBackend | str = "local"
+    # 可信认证身份中的唯一 username；插件 selected 授权与用户技能归属不是同一概念。
+    username: str = ""
     # 当前用户有权访问的全部技能名（由请求入口按 user_id 解析得到）。
     # 仅用于说明/调试，不作为本地读取的前置条件。
     available_skill_names: list[str] = field(default_factory=list)
+    _runtime_skills_dir: Path | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         """Convert the configured backend name once; tools only see the backend contract."""
@@ -215,15 +235,38 @@ class ConversationWorkspaceRuntime:
 
     @property
     def runtime_skills_dir(self) -> Path:
-        """本会话 runtime-skills 快照目录（运行域只读技能根）。"""
-        return runtime_skills_snapshot_dir_from_workspace(self.workspace_root)
+        """本次运行固定的 runtime-skills 目录；未解析时回退旧会话路径。"""
+        return self._runtime_skills_dir or runtime_skills_snapshot_dir_from_workspace(self.workspace_root)
+
+    async def ensure_runtime_skills_async(self) -> Path:
+        """解析并返回本次运行最新的共享技能快照目录。"""
+        if self._runtime_skills_dir is not None and is_runtime_skill_snapshot_ready(self._runtime_skills_dir):
+            return self._runtime_skills_dir
+        cid = Path(self.workspace_root).resolve().parent.name
+        self._runtime_skills_dir = await build_runtime_skill_snapshot_async(
+            self.user_id,
+            cid,
+            username=self.username,
+        )
+        return self._runtime_skills_dir
+
+    def activate_semantic_cache(self, *, datasource_id: str) -> Path:
+        """固定本次运行的数据源组语义缓存目录。"""
+        normalized_datasource = str(datasource_id or "").strip()
+        if not normalized_datasource:
+            raise ValueError("语义缓存缺少 datasource_id")
+        write_semantic_cache_ref(
+            self.workspace_root,
+            datasource_id=normalized_datasource,
+        )
+        return semantic_cache_dir(self.user_id, normalized_datasource).resolve()
 
     async def _ensure_snapshot_async(self) -> None:
         """确保本会话技能快照存在且可用；为空则按当前用户可见集合惰性构建。
 
-        ``ensure_conversation_workspace`` 会先建出空的 ``runtime-skills`` 目录，因此不能仅以
-        目录是否存在判断快照就绪——空目录必须在此填充。已含技能内容或带完成标记的目录
-        视为会话内稳定快照，直接复用、不重复复制。单个技能路径异常不会中断构建
+        共享快照目录按用户复用，首次运行或运维清理后可能尚未就绪，因此不能仅以
+        目录是否存在判断快照就绪；未就绪时在此惰性构建。已含技能内容或带完成标记
+        的目录视为稳定快照，直接复用、不重复复制。单个技能路径异常不会中断构建
         （由 ``list_runtime_skill_sources_async`` 跳过），构建失败也不影响技能本地读取。
         """
         snapshot_dir = self.runtime_skills_dir
@@ -233,7 +276,12 @@ class ConversationWorkspaceRuntime:
         # 快照目录直接由工作区根推导（self.runtime_skills_dir），不从路径反推 uid。
         cid = Path(self.workspace_root).resolve().parent.name
         try:
-            await build_runtime_skill_snapshot_async(self.user_id, cid, target_dir=snapshot_dir)
+            await build_runtime_skill_snapshot_async(
+                self.user_id,
+                cid,
+                username=self.username,
+                target_dir=snapshot_dir,
+            )
         except Exception as err:
             logger.warning("惰性构建技能快照失败，技能读取可能不可用: %s", err)
 
@@ -241,7 +289,7 @@ class ConversationWorkspaceRuntime:
         """将 /mnt/skills 路径解析到本会话快照真实文件系统。
 
         运行域技能统一为扁平路径 ``/mnt/skills/<name>/...``，直接映射到
-        ``threads/<uid>/<yyyy-MM-DD>/<cid>/runtime-skills/<name>/...``；不做按名远程解析，
+        ``threads/<uid>/runtime/skills/<name>/...``；不做按名远程解析，
         快照内不存在即视为无权限。快照缺失时惰性构建。
         路径安全规则统一在 utils.skill_paths.resolve_skill_snapshot_path。
         """
@@ -250,7 +298,15 @@ class ConversationWorkspaceRuntime:
         if not raw.startswith(prefix):
             raise ValueError(f"只允许访问技能路径: {path}")
         await self._ensure_snapshot_async()
-        return resolve_skill_snapshot_path(self.runtime_skills_dir, path)
+        try:
+            return resolve_skill_snapshot_path(self.runtime_skills_dir, path)
+        except ValueError:
+            # 跨进程重建的两次 rename 之间快照根可能瞬时不可用；只在目录确实未就绪
+            # 时重建后重试一次，避免把「技能不存在 / 越权」误当成竞态吞掉。
+            if is_runtime_skill_snapshot_ready(self.runtime_skills_dir):
+                raise
+            await self._ensure_snapshot_async()
+            return resolve_skill_snapshot_path(self.runtime_skills_dir, path)
 
     def _executable_backend(self) -> ExecutableWorkspaceBackend:
         if not isinstance(self.backend, ExecutableWorkspaceBackend):
@@ -272,12 +328,67 @@ class ConversationWorkspaceRuntime:
     async def write_text_file(self, *, file_path: str, content: str, mode: str) -> dict[str, Any]:
         return await self._resolved_backend.write_text_file(self, file_path=file_path, content=content, mode=mode)
 
+    async def write_binary_file(self, *, file_path: str, data: bytes) -> dict[str, Any]:
+        """Persist binary content (e.g. generated chart PNG) through the active backend."""
+        return await self._resolved_backend.write_binary_file(self, file_path=file_path, data=data)
+
     async def write_internal_text_files(self, entries: list[tuple[str, str]]) -> list[dict[str, Any]]:
-        """Write system-owned semantic model files through the active backend."""
+        """Write system-owned semantic files to local cache, then sync sandbox copies."""
+        if self.backend_name != "local":
+            await asyncio.to_thread(self._write_semantic_cache, entries)
         return await semantic_model_workspace_service.write_files(self, entries)
 
+    @staticmethod
+    def _assert_semantic_path(path: str) -> None:
+        logical_path = WORKSPACE_PATH_POLICY.parse(path)
+        if not logical_path.is_semantic_model or not logical_path.relative_path.lower().endswith(".yaml"):
+            raise ValueError("内部语义模型写入只能覆盖 /mnt/user-data/workspace/.system/semantic/ 下的 YAML 文件")
+
+    def _write_semantic_cache(self, entries: list[tuple[str, str]]) -> None:
+        """语义文件先落本地派生缓存；sandbox 仍由 backend 同步远端副本。"""
+        for raw_path, content in entries:
+            path = str(raw_path or "").strip()
+            if not path:
+                continue
+            self._assert_semantic_path(path)
+            target = resolve_workspace_path(
+                self.workspace_root,
+                path,
+                writable=True,
+                allow_managed_semantic_model_write=True,
+            )
+            target.parent.mkdir(parents=True, exist_ok=True)
+            temporary_path: Path | None = None
+            try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w",
+                    encoding="utf-8",
+                    dir=target.parent,
+                    prefix=f".{target.name}.",
+                    suffix=".tmp",
+                    delete=False,
+                ) as file_obj:
+                    temporary_path = Path(file_obj.name)
+                    file_obj.write(content)
+                    file_obj.flush()
+                    os.fsync(file_obj.fileno())
+                os.replace(temporary_path, target)
+                temporary_path = None
+            finally:
+                if temporary_path is not None:
+                    temporary_path.unlink(missing_ok=True)
+
     async def delete_internal_text_files(self, *, path: str) -> dict[str, Any]:
-        """Delete one system-owned semantic model file through the active backend."""
+        """Delete one system-owned semantic file from local cache, then the sandbox copy."""
+        if self.backend_name != "local":
+            self._assert_semantic_path(path)
+            target = resolve_workspace_path(
+                self.workspace_root,
+                path,
+                writable=True,
+                allow_managed_semantic_model_write=True,
+            )
+            target.unlink(missing_ok=True)
         return await semantic_model_workspace_service.delete_files(self, path=path)
 
     async def replace_text_file(
@@ -410,8 +521,16 @@ class ConversationWorkspaceRuntime:
         return await self._executable_backend().run_officecli(self, args=args, cwd=cwd, timeout_seconds=timeout_seconds)
 
 
-def workspace_runtime_from_state(state: Mapping[str, Any] | None) -> ConversationWorkspaceRuntime:
-    """Rebuild a workspace runtime from serializable AgentState fields."""
+def workspace_runtime_from_state(
+    state: Mapping[str, Any] | None,
+    *,
+    user_id: str | None = None,
+    username: str | None = None,
+) -> ConversationWorkspaceRuntime:
+    """Rebuild a workspace runtime from serializable AgentState fields.
+
+    身份来自 run context（由调用方显式传入），state 只保存会话与工作区。
+    """
     values = state if isinstance(state, Mapping) else {}
     workspace = values.get("workspace")
     context = workspace if isinstance(workspace, Mapping) else {}
@@ -421,8 +540,9 @@ def workspace_runtime_from_state(state: Mapping[str, Any] | None) -> Conversatio
     backend_name = str(context.get("workspace_backend") or "local").strip().lower() or "local"
     return ConversationWorkspaceRuntime(
         workspace_root=workspace_root,
-        user_id=str(values.get("user_id") or "system").strip() or "system",
+        user_id=str(user_id or "system").strip() or "system",
         backend=backend_name,
+        username=str(username or "").strip(),
     )
 
 
@@ -434,10 +554,10 @@ def ensure_conversation_workspace(
 ) -> dict[str, str]:
     """创建并返回 ChatData 会话目录结构。
 
-    布局：``threads/<uid>/<yyyy-MM-DD>/<cid>/{user-data/{workspace,outputs,uploads}, runtime-skills/}``。
+    布局：共享根 ``threads/<uid>/<yyyy-MM-DD>/<cid>/user-data/``；
+    技能快照按用户共享，落到 ``threads/<uid>/runtime/skills/``。
     ``created_date`` 为会话创建日期（``YYYY-MM-DD``，缺省当前日期）。``user-data`` 为模型可写
-    运行域；``runtime-skills`` 为会话级技能快照（由
-    ``runtime_skill_snapshot.build_runtime_skill_snapshot_async`` 惰性填充）。
+    运行域；``runtime-skills`` 落在用户 ``runtime/skills`` 派生目录，不在会话目录预建。
     """
     try:
         base = conversation_thread_dir(user_id, conversation_id, created_date=created_date).resolve()
@@ -445,13 +565,14 @@ def ensure_conversation_workspace(
         raise ValueError(f"会话工作区路径参数非法: {exc}") from exc
     root = (base / "user-data").resolve()
     root.mkdir(parents=True, exist_ok=True)
-    (base / "runtime-skills").mkdir(parents=True, exist_ok=True)
     paths = {"root": str(root)}
     for name in WORKSPACE_DIR_NAMES:
         path = root / name
         path.mkdir(parents=True, exist_ok=True)
         paths[name.replace("-", "_")] = str(path)
-    (root / "outputs" / TOOL_OFFLOAD_DIR_NAME).mkdir(parents=True, exist_ok=True)
+    system_root = root / "workspace" / SYSTEM_DIR_NAME
+    (system_root / TOOL_OFFLOAD_DIR_NAME).mkdir(parents=True, exist_ok=True)
+    (system_root / QUERY_RESULT_DIR_NAME).mkdir(parents=True, exist_ok=True)
     return paths
 
 
@@ -463,6 +584,74 @@ def resolve_uploads_root(user_id: str, thread_id: str, *, created_date: str | No
     """
     paths = ensure_conversation_workspace(thread_id, user_id, created_date=created_date)
     return Path(paths["uploads"])
+
+
+def _resolve_semantic_workspace_path(
+    workspace_root: str,
+    logical_path: Any,
+    *,
+    path: str,
+    writable: bool,
+    allow_managed_semantic_model_write: bool,
+) -> Path | None:
+    """语义模型逻辑路径映射到本地缓存；非语义路径返回 None。"""
+    if not getattr(logical_path, "is_semantic_model", False):
+        return None
+    if writable and not allow_managed_semantic_model_write:
+        raise ValueError("workspace/.system/semantic 是本轮语义模型只读快照，不能修改")
+    semantic_root = conversation_semantic_dir_from_workspace(workspace_root).resolve()
+    semantic_prefix = f"{SYSTEM_DIR_NAME}/{SEMANTIC_DIR_NAME}"
+    suffix = logical_path.relative_path[len(semantic_prefix) :].lstrip("/")
+    candidate = semantic_root / suffix
+    if candidate.is_symlink():
+        raise ValueError(f"不允许操作符号链接: {path}")
+    target = candidate.resolve()
+    if target != semantic_root and semantic_root not in target.parents:
+        raise ValueError(f"路径越界，禁止访问语义缓存之外的路径: {path}")
+    # 会话 ref 是语义缓存的唯一真值：没有 ref 时 semantic_root 是占位目录，
+    # 读旧版共享工作区 workspace/.system/semantic/ 里的历史 YAML 一律不兜底。
+    return target
+
+
+def _resolve_regular_workspace_path(
+    root: Path,
+    *,
+    path: str,
+    logical_path: Any,
+    writable: bool,
+    allow_managed_semantic_model_write: bool,
+    materialize_uploads: bool,
+) -> Path:
+    """解析非 semantic 的工作区路径并实施目录边界。"""
+    # 与 sandbox 后端保持同一口径：符号链接一律拒绝操作（sandbox 侧由
+    # _sandbox_path_kind 对 entry_type=symlink 直接报错）。必须在 resolve 之前判断
+    # 最终组件，否则 realpath 会先把链接跟到目标，下游的 is_symlink() 守卫永远不可达，
+    # 造成「删链接实际删掉目标文件」。祖先目录已在 root=resolve() 时归一化，
+    # 因此这里只会命中被操作对象本身，不会误伤 CHAT_DATA_HOME 位于符号链接下的部署。
+    candidate = root / logical_path.normalized
+    if candidate.is_symlink():
+        raise ValueError(f"不允许操作符号链接: {path}")
+
+    target = candidate.resolve()
+    if root not in target.parents:
+        raise ValueError(f"路径越界，禁止访问当前会话目录之外的路径: {path}")
+
+    visible_roots = [(root / name).resolve() for name in WORKSPACE_DIR_NAMES]
+    if not any(target == item or item in target.parents for item in visible_roots):
+        raise ValueError(
+            "只允许访问 /mnt/user-data/workspace、/mnt/user-data/outputs、"
+            "/mnt/user-data/uploads 或 /mnt/user-data/memory"
+        )
+
+    if writable:
+        if is_system_result_workspace_path(str(root), target):
+            raise ValueError("不允许通过文件编辑工具修改系统结果目录")
+        if is_managed_semantic_model_workspace_path(str(root), target) and not allow_managed_semantic_model_write:
+            raise ValueError("workspace/.system/semantic 是本轮语义模型只读快照，不能修改")
+    elif logical_path.kind == "uploads" and materialize_uploads:
+        # 上传文件可能以应用层密文落盘；只有真正读取时才解密，列表/删除不触发。
+        target = materialize_plaintext(target)
+    return target
 
 
 def resolve_workspace_path(
@@ -492,60 +681,62 @@ def resolve_workspace_path(
     else:
         WORKSPACE_PATH_POLICY.assert_readable(logical_path)
 
-    # 与 sandbox 后端保持同一口径：符号链接一律拒绝操作（sandbox 侧由
-    # _sandbox_path_kind 对 entry_type=symlink 直接报错）。必须在 resolve 之前判断
-    # 最终组件，否则 realpath 会先把链接跟到目标，下游的 is_symlink() 守卫永远不可达，
-    # 造成「删链接实际删掉目标文件」。祖先目录已在 root=resolve() 时归一化，
-    # 因此这里只会命中被操作对象本身，不会误伤 CHAT_DATA_HOME 位于符号链接下的部署。
-    candidate = root / logical_path.normalized
-    if candidate.is_symlink():
-        raise ValueError(f"不允许操作符号链接: {path}")
+    semantic_target = _resolve_semantic_workspace_path(
+        workspace_root,
+        logical_path,
+        path=path,
+        writable=writable,
+        allow_managed_semantic_model_write=allow_managed_semantic_model_write,
+    )
+    if semantic_target is not None:
+        return semantic_target
 
-    target = candidate.resolve()
-    if root not in target.parents:
-        raise ValueError(f"路径越界，禁止访问当前会话目录之外的路径: {path}")
-
-    visible_roots = [(root / name).resolve() for name in WORKSPACE_DIR_NAMES]
-    if not any(target == item or item in target.parents for item in visible_roots):
-        raise ValueError(
-            "只允许访问 /mnt/user-data/workspace、/mnt/user-data/outputs、"
-            "/mnt/user-data/uploads 或 /mnt/user-data/memory"
-        )
-
-    if writable:
-        if is_system_result_workspace_path(str(root), target):
-            raise ValueError("不允许通过文件编辑工具修改系统结果目录")
-        if is_managed_semantic_model_workspace_path(str(root), target) and not allow_managed_semantic_model_write:
-            raise ValueError("/mnt/user-data/workspace/semantic/ 是本轮语义模型只读快照，不能修改")
-    elif logical_path.kind == "uploads" and materialize_uploads:
-        # 上传文件可能以应用层密文落盘；只有真正读取时才解密，列表/删除不触发。
-        target = materialize_plaintext(target)
-
-    return target
+    return _resolve_regular_workspace_path(
+        root,
+        path=path,
+        logical_path=logical_path,
+        writable=writable,
+        allow_managed_semantic_model_write=allow_managed_semantic_model_write,
+        materialize_uploads=materialize_uploads,
+    )
 
 
 def is_system_result_workspace_path(workspace_root: str, path: Path) -> bool:
     """Return whether a resolved path belongs to system-managed result storage."""
-    output_root = Path(workspace_root).resolve() / "outputs"
+    system_root = Path(workspace_root).resolve() / "workspace" / SYSTEM_DIR_NAME
     target = path.resolve()
     result_roots = (
-        (output_root / TOOL_OFFLOAD_DIR_NAME).resolve(),
-        (output_root / QUERY_RESULT_DIR_NAME).resolve(),
+        system_root.resolve(),
+        (system_root / TOOL_OFFLOAD_DIR_NAME).resolve(),
+        (system_root / QUERY_RESULT_DIR_NAME).resolve(),
     )
     return any(target == root or root in target.parents for root in result_roots)
 
 
 def is_managed_semantic_model_workspace_path(workspace_root: str, path: Path) -> bool:
     """Return whether a path belongs to the system-owned semantic model directory."""
-    semantic_root = (Path(workspace_root).resolve() / "workspace" / "semantic").resolve()
+    # 共享工作区里的历史 semantic 目录仍属系统只读区：这是写保护边界，
+    # 只阻止写入、不提供任何读取兜底；删掉会让历史目录变成可写。
+    cache_root = conversation_semantic_dir_from_workspace(workspace_root).resolve()
+    local_system_root = (Path(workspace_root).resolve() / "workspace" / SYSTEM_DIR_NAME / SEMANTIC_DIR_NAME).resolve()
     target = path.resolve()
-    return target == semantic_root or semantic_root in target.parents
+    return any(target == root or root in target.parents for root in (cache_root, local_system_root))
 
 
 def to_visible_path(workspace_root: str, path: Path) -> str:
     """把物理路径转为模型/前端可见路径（统一规范前缀 /mnt/user-data/）。"""
     root = Path(workspace_root).resolve()
     target = path.resolve()
+    semantic_root = conversation_semantic_dir_from_workspace(workspace_root).resolve()
+    # 仅做物理路径→规范前缀的显示映射；旧目录不再被读取、列举或上传。
+    for current_root in (semantic_root,):
+        if target == current_root or current_root in target.parents:
+            relative_semantic = target.relative_to(current_root).as_posix()
+            # Path.relative_to(self) 返回 ".", 拼进去会变成含 "." 段的非规范路径，
+            # 被 _assert_canonical 拒绝；目录本身应直接返回规范前缀。
+            if relative_semantic and relative_semantic != ".":
+                return f"{SEMANTIC_VIRTUAL_ROOT}/{relative_semantic}"
+            return SEMANTIC_VIRTUAL_ROOT
     original = original_upload_path(target)
     if original is not None:
         target = original
@@ -599,6 +790,7 @@ class WorkspacePathMapping:
 
     workspace_root: str
     runtime_skills_dir: Path | None = None
+    semantic_cache_dir: Path | None = None
 
     # 裸别名仅在路径边界处匹配：前置负向断言挡住 server/uploads 之类内部段，
     # 后置负向断言挡住 /workspaceX 误吞。与工作区虚拟前缀共用同一套边界规则。
@@ -615,6 +807,15 @@ class WorkspacePathMapping:
                 "请检查 CHAT_DATA_HOME 环境变量是否误用了 sandbox 虚拟挂载点路径"
             )
         self._root = root
+        self._semantic_physical = str(
+            self.semantic_cache_dir or conversation_semantic_dir_from_workspace(self.workspace_root)
+        ).rstrip("/")
+        # 语义前缀必须按「路径段边界」替换：裸 str.replace 会把 semantic-backup、
+        # semanticX、semantic.yaml 之类同前缀路径一并改写，导致校验解析到共享根、
+        # 执行却翻到缓存目录。段字符含 . 与 -，结尾只允许分隔符或串尾。
+        self._semantic_virtual_re = re.compile(re.escape(SEMANTIC_VIRTUAL_ROOT) + r"(?![A-Za-z0-9_.-])")
+        self._semantic_physical_re = re.compile(re.escape(self._semantic_physical) + r"(?![A-Za-z0-9_.-])")
+        self._virtual_semantic_prefix = SEMANTIC_VIRTUAL_ROOT
         self._physical_workspace = {
             "workspace": f"{root}/workspace",
             "outputs": f"{root}/outputs",
@@ -640,7 +841,9 @@ class WorkspacePathMapping:
         # 2) 技能虚拟 → 物理（最长优先）。
         for virtual_root, physical in sorted(self._skill_physical.items(), key=lambda kv: len(kv[0]), reverse=True):
             out = out.replace(virtual_root, physical)
-        # 3) 工作区虚拟 → 物理（单次替换，root 不含 /mnt/user-data/，不自引用）。
+        # 3) 语义缓存虚拟 → 物理（cache 在共享工作区之外，按路径段边界替换）。
+        out = self._semantic_virtual_re.sub(lambda _match: self._semantic_physical, out)
+        # 4) 其余工作区虚拟 → 物理（单次替换，root 不含 /mnt/user-data/，不自引用）。
         out = self._VIRTUAL_RE.sub(lambda m: f"{self._root}/{m.group(1)}", out)
         return out
 
@@ -653,7 +856,10 @@ class WorkspacePathMapping:
         for virtual_root, physical in sorted(self._skill_physical.items(), key=lambda kv: len(kv[0]), reverse=True):
             if physical:
                 out = out.replace(physical, virtual_root)
-        # 2) 工作区物理 → 虚拟。
+        # 2) 语义缓存物理 → 虚拟（同样按路径段边界，避免误遮蔽 ds1-backup 一类目录）。
+        if self._semantic_physical:
+            out = self._semantic_physical_re.sub(lambda _match: self._virtual_semantic_prefix, out)
+        # 3) 工作区物理 → 虚拟。
         for name, physical in self._physical_workspace.items():
             out = out.replace(physical, f"/mnt/user-data/{name}")
         return out

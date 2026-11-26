@@ -5,7 +5,7 @@ import { useWorkspaceFileMention, workspaceFileDirPath, type WorkspaceFilePick }
 const buildFiles = (): WorkspaceFilePick[] => [
   { relativePath: 'uploads/用户上传.pdf', name: '用户上传.pdf' },
   { relativePath: 'outputs/分析报告.md', name: '分析报告.md' },
-  { relativePath: 'workspace/semantic/订单指标集__a1b2.yaml', name: '订单指标集__a1b2.yaml' },
+  { relativePath: 'workspace/.system/semantic/订单指标集__a1b2.yaml', name: '订单指标集__a1b2.yaml' },
 ]
 
 const keydown = (key: string): KeyboardEvent => new KeyboardEvent('keydown', { key, cancelable: true })
@@ -31,7 +31,7 @@ describe('useWorkspaceFileMention', () => {
     const mention = useWorkspaceFileMention({ input, files: ref(buildFiles()) })
     // 语义模型按工作区文件名（订单指标集__a1b2.yaml）参与匹配，不特殊化
     expect(mention.displayedMentionFiles.value.map(file => file.relativePath))
-      .toEqual(['workspace/semantic/订单指标集__a1b2.yaml'])
+      .toEqual(['workspace/.system/semantic/订单指标集__a1b2.yaml'])
 
     input.value = '@uploads'
     expect(mention.displayedMentionFiles.value.map(file => file.relativePath))
@@ -55,7 +55,7 @@ describe('useWorkspaceFileMention', () => {
   it('平铺展示：文件名后跟目录路径（含末尾斜杠）', () => {
     const [pdf, , yaml] = buildFiles()
     expect(workspaceFileDirPath(pdf!)).toBe('uploads/')
-    expect(workspaceFileDirPath(yaml!)).toBe('workspace/semantic/')
+    expect(workspaceFileDirPath(yaml!)).toBe('workspace/.system/semantic/')
   })
 
   it('removeMentionFile 按 relativePath 移除、clearMentionFiles 清空', () => {

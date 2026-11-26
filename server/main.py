@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from shutdown_config import REQUEST_DRAIN_TIMEOUT_SECONDS
 from utils.common_util import load_runtime_env, merge_no_proxy
 
 _SERVER_DIR = Path(__file__).resolve().parent
@@ -178,4 +179,14 @@ if __name__ == "__main__":
     reload_enabled = _env_flag("FASTAPI_RELOAD", False)
     target_app = "main:app" if reload_enabled else app
     logger.info("[startup] host=0.0.0.0 port=%s reload=%s", port, reload_enabled)
-    uvicorn.run(target_app, host="0.0.0.0", port=port, reload=reload_enabled, access_log=False, log_level="warning")
+    uvicorn.run(
+        target_app,
+        host="0.0.0.0",
+        port=port,
+        reload=reload_enabled,
+        access_log=False,
+        log_level="warning",
+        # SSE 请求会持续到 Run 结束；若不设上限，uvicorn 会先无限等待请求，
+        # 永远进不到 lifespan shutdown，Agent Run 无法收口为 interrupted。
+        timeout_graceful_shutdown=REQUEST_DRAIN_TIMEOUT_SECONDS,
+    )

@@ -47,6 +47,8 @@ from apps.chat_data_app.agent.workspace.workspace_sync import (
 from apps.chat_data_app.agent.workspace.workspace_text_budget import allocate_file_read_line_budgets
 from utils.logger import get_logger
 from utils.skill_paths import SKILLS_VIRTUAL_ROOT, resolve_skill_snapshot_path
+from utils.storage_paths import conversation_semantic_dir_from_workspace
+from utils.workspace_system_paths import SEMANTIC_VIRTUAL_ROOT
 
 logger = get_logger(__name__)
 
@@ -307,7 +309,7 @@ def _write_local_text_file(
     if allow_managed_semantic_model_write and (
         not is_managed_semantic_model_workspace_path(workspace_root, target) or target.suffix.lower() != ".yaml"
     ):
-        raise ValueError("内部系统写入只允许 /mnt/user-data/workspace/semantic/ 下的 YAML 文件")
+        raise ValueError("内部语义模型写入只能覆盖 /mnt/user-data/workspace/.system/semantic/ 下的 YAML 文件")
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary_path: Path | None = None
     try:
@@ -334,6 +336,55 @@ def _write_local_text_file(
         "mode": mode,
         "bytes": len(content.encode("utf-8")),
     }
+
+
+def _write_local_binary_file(workspace_root: str, file_path: str, data: bytes) -> dict[str, Any]:
+    """覆盖式写入二进制内容（如 data2image 生成的图表 PNG）；与文本写入同一套原子替换。"""
+    target = resolve_workspace_path(workspace_root, file_path, writable=True)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as file_obj:
+            temporary_path = Path(file_obj.name)
+            file_obj.write(data)
+            file_obj.flush()
+            os.fsync(file_obj.fileno())
+        os.replace(temporary_path, target)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+    return {
+        "operation": "write",
+        "file_path": to_visible_path(workspace_root, target),
+        "bytes": len(data),
+    }
+
+
+def write_local_workspace_text_file(workspace_root: str, file_path: str, content: str) -> dict[str, Any]:
+    """覆盖应用侧已存在的文本文件（人侧在线编辑入口）。
+
+    只覆盖不创建新文件；写权限复用 ``resolve_workspace_path(writable=True)``，
+    因此 uploads 与 ``workspace/.system`` 仍会被路径策略拒绝。
+    """
+    target = resolve_workspace_path(workspace_root, file_path, writable=True)
+    if not target.exists():
+        raise FileNotFoundError(f"文件不存在: {file_path}")
+    if not target.is_file():
+        raise ValueError(f"目标是目录，不是文件: {file_path}")
+    try:
+        target.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"暂不支持编辑二进制文件: {file_path}") from exc
+    result = _write_local_text_file(workspace_root, file_path, content, "overwrite")
+    result["mtime"] = target.stat().st_mtime
+    return result
 
 
 def _replace_local_text_file(
@@ -430,7 +481,7 @@ def _local_entry_visible_path(
     if is_skill:
         return f"{visible_dir}/{child.name}"
     try:
-        return "/mnt/user-data/" + child.resolve().relative_to(root).as_posix()
+        return to_visible_path(str(root), child)
     except ValueError:
         return None
 
@@ -520,6 +571,19 @@ def _list_local_workspace_dir(
         is_skill=is_skill,
         max_depth=max_depth,
     )
+    if not is_skill and target == (root / "workspace").resolve():
+        # 共享工作区里的历史 semantic 目录一律不展示；只有当前缓存存在时才注入虚拟目录。
+        entries = [entry for entry in entries if entry.get("path") != f"{SEMANTIC_VIRTUAL_ROOT}/"]
+        semantic_root = conversation_semantic_dir_from_workspace(str(root))
+        if semantic_root.is_dir():
+            entries.append(
+                {
+                    "type": "dir",
+                    "path": f"{SEMANTIC_VIRTUAL_ROOT}/",
+                    "size": "-",
+                    "mtime": datetime.datetime.fromtimestamp(semantic_root.stat().st_mtime).strftime("%Y-%m-%d %H:%M"),
+                }
+            )
     return entries
 
 
@@ -675,6 +739,62 @@ def _copy_local_path(workspace_root: str, source_path: str, destination_path: st
     )
 
 
+def _append_semantic_search_matches(
+    runtime: ConversationWorkspaceRuntime,
+    matches: list[dict[str, Any]],
+    *,
+    pattern: str,
+    max_results: int,
+) -> None:
+    """根目录搜索时追加 semantic 缓存文件。"""
+    if len(matches) >= max_results:
+        return
+    semantic_root = conversation_semantic_dir_from_workspace(runtime.workspace_root)
+    if not semantic_root.is_dir():
+        return
+    for item in sorted(semantic_root.rglob("*")):
+        if len(matches) >= max_results:
+            break
+        if item.is_symlink() or not item.is_file() or not fnmatch.fnmatchcase(item.name, pattern):
+            continue
+        matches.append({"path": to_visible_path(runtime.workspace_root, item.resolve()), "type": "file"})
+
+
+def _is_stale_legacy_semantic(runtime: ConversationWorkspaceRuntime, target: Path, item: Path) -> bool:
+    """无条件跳过共享工作区内的历史 semantic 文件（是否命中当前缓存都不展示）。"""
+    if target != (Path(runtime.workspace_root).resolve() / "workspace"):
+        return False
+    legacy_semantic = target / "semantic"
+    return item == legacy_semantic or legacy_semantic in item.parents
+
+
+def _collect_local_search_matches(
+    runtime: ConversationWorkspaceRuntime,
+    target: Path,
+    *,
+    visible_root: str,
+    is_skill: bool,
+    pattern: str,
+    max_results: int,
+) -> list[dict[str, Any]]:
+    """遍历目录并生成文件搜索匹配。"""
+    matches: list[dict[str, Any]] = []
+    for item in sorted(target.rglob("*")):
+        if len(matches) >= max_results:
+            break
+        if item.is_symlink() or not item.is_file() or not fnmatch.fnmatchcase(item.name, pattern):
+            continue
+        if _is_stale_legacy_semantic(runtime, target, item):
+            continue
+        resolved = item.resolve()
+        if is_skill:
+            visible_path = visible_root.rstrip("/") + "/" + item.relative_to(target).as_posix()
+        else:
+            visible_path = to_visible_path(runtime.workspace_root, resolved)
+        matches.append({"path": visible_path, "type": "file"})
+    return matches
+
+
 def _search_local_workspace_files(
     runtime: ConversationWorkspaceRuntime,
     path: str,
@@ -691,18 +811,24 @@ def _search_local_workspace_files(
         is_skill = False
     if not target.is_dir() or target.is_symlink():
         raise ValueError(f"搜索路径必须是目录: {path}")
-    matches: list[dict[str, Any]] = []
-    for item in sorted(target.rglob("*")):
-        if len(matches) >= max_results:
-            break
-        if item.is_symlink() or not item.is_file() or not fnmatch.fnmatchcase(item.name, pattern):
-            continue
-        resolved = item.resolve()
-        if is_skill:
-            visible_path = visible_root.rstrip("/") + "/" + item.relative_to(target).as_posix()
-        else:
-            visible_path = to_visible_path(runtime.workspace_root, resolved)
-        matches.append({"path": visible_path, "type": "file"})
+    matches = _collect_local_search_matches(
+        runtime,
+        target,
+        visible_root=visible_root,
+        is_skill=is_skill,
+        pattern=pattern,
+        max_results=max_results,
+    )
+    if not is_skill and target == (Path(runtime.workspace_root).resolve() / "workspace"):
+        _append_semantic_search_matches(runtime, matches, pattern=pattern, max_results=max_results)
+        deduped: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for item in matches:
+            if item["path"] in seen:
+                continue
+            seen.add(item["path"])
+            deduped.append(item)
+        matches = deduped
     return matches
 
 
@@ -782,6 +908,91 @@ def _build_local_grep_match(
     return entry
 
 
+def _grep_semantic_cache(
+    runtime: ConversationWorkspaceRuntime,
+    *,
+    patterns: list[str],
+    glob: str,
+    max_results: int,
+    max_chars: int,
+    use_regex: bool,
+    ignore_case: bool,
+    context_lines: int,
+    output_mode: str,
+) -> dict[str, Any] | None:
+    """根目录 grep 时把 semantic 缓存并入结果；非根路径返回 None。"""
+    semantic_root = conversation_semantic_dir_from_workspace(runtime.workspace_root)
+    if not semantic_root.is_dir():
+        return None
+    args = build_rg_args(
+        str(semantic_root),
+        patterns,
+        glob=glob,
+        use_regex=use_regex,
+        ignore_case=ignore_case,
+        context_lines=context_lines,
+        output_mode=output_mode,
+    )
+    stdout = _run_local_rg(args)
+    if output_mode in ("files_with_matches", "count"):
+        entries, has_more = parse_rg_files_or_counts(
+            stdout,
+            str(semantic_root),
+            max_results=max_results,
+            mode=output_mode,
+        )
+        return {
+            "entries": [
+                {
+                    "path": to_visible_path(runtime.workspace_root, (semantic_root / entry["file"]).resolve()),
+                    **({"match_count": entry["match_count"]} if "match_count" in entry else {}),
+                }
+                for entry in entries
+            ],
+            "has_more": has_more,
+        }
+    raw_matches, has_more = parse_rg_output(
+        stdout,
+        str(semantic_root),
+        max_results=max_results,
+        max_chars=max_chars,
+        context_lines=context_lines if output_mode == "content" else 0,
+    )
+    return {
+        "matches": [_build_local_grep_match(match, False, semantic_root, "", runtime) for match in raw_matches],
+        "has_more": has_more,
+    }
+
+
+def _grep_semantic_for_workspace_root(
+    runtime: ConversationWorkspaceRuntime,
+    target: Path,
+    *,
+    patterns: list[str],
+    glob: str,
+    max_results: int,
+    max_chars: int,
+    use_regex: bool,
+    ignore_case: bool,
+    context_lines: int,
+    output_mode: str,
+) -> dict[str, Any] | None:
+    """仅工作区根 grep 时返回 semantic 缓存结果。"""
+    if target != (Path(runtime.workspace_root).resolve() / "workspace"):
+        return None
+    return _grep_semantic_cache(
+        runtime,
+        patterns=patterns,
+        glob=glob,
+        max_results=max_results,
+        max_chars=max_chars,
+        use_regex=use_regex,
+        ignore_case=ignore_case,
+        context_lines=context_lines,
+        output_mode=output_mode,
+    )
+
+
 def _grep_local_workspace_text(
     runtime: ConversationWorkspaceRuntime,
     path: str,
@@ -797,6 +1008,8 @@ def _grep_local_workspace_text(
     target, visible_root, is_skill = _resolve_grep_target(runtime, path)
     if target.is_symlink() or not target.exists():
         raise FileNotFoundError(f"路径不存在: {path}")
+    # 历史 semantic 目录不参与根目录 grep，缓存是否就绪都不改这条边界。
+    exclude_globs = ("!semantic/**",) if target == (Path(runtime.workspace_root).resolve() / "workspace") else ()
     args = build_rg_args(
         str(target),
         patterns,
@@ -805,8 +1018,21 @@ def _grep_local_workspace_text(
         ignore_case=ignore_case,
         context_lines=context_lines,
         output_mode=output_mode,
+        exclude_globs=exclude_globs,
     )
     stdout = _run_local_rg(args)
+    semantic = _grep_semantic_for_workspace_root(
+        runtime,
+        target,
+        patterns=patterns,
+        glob=glob,
+        max_results=max_results,
+        max_chars=max_chars,
+        use_regex=use_regex,
+        ignore_case=ignore_case,
+        context_lines=context_lines,
+        output_mode=output_mode,
+    )
 
     if output_mode in ("files_with_matches", "count"):
         entries, has_more = parse_rg_files_or_counts(
@@ -822,7 +1048,15 @@ def _grep_local_workspace_text(
             }
             for e in entries
         ]
-        return {"entries": visible_entries, "has_more": has_more, "skipped_binary": 0, "skipped_large": 0}
+        if semantic:
+            visible_entries.extend(semantic["entries"])
+            has_more = has_more or semantic["has_more"]
+        return {
+            "entries": visible_entries[:max_results],
+            "has_more": has_more,
+            "skipped_binary": 0,
+            "skipped_large": 0,
+        }
 
     raw_matches, has_more = parse_rg_output(
         stdout,
@@ -832,7 +1066,15 @@ def _grep_local_workspace_text(
         context_lines=context_lines if output_mode == "content" else 0,
     )
     matches = [_build_local_grep_match(m, is_skill, target, visible_root, runtime) for m in raw_matches]
-    return {"matches": matches, "has_more": has_more, "skipped_binary": 0, "skipped_large": 0}
+    if semantic:
+        matches.extend(semantic["matches"])
+        has_more = has_more or semantic["has_more"]
+    return {
+        "matches": matches[:max_results],
+        "has_more": has_more,
+        "skipped_binary": 0,
+        "skipped_large": 0,
+    }
 
 
 def _resolve_local_skill_path(runtime: ConversationWorkspaceRuntime, path: str) -> tuple[Path, str]:
@@ -875,6 +1117,15 @@ class LocalWorkspaceBackend:
         mode: str,
     ) -> dict[str, Any]:
         return await asyncio.to_thread(_write_local_text_file, runtime.workspace_root, file_path, content, mode)
+
+    async def write_binary_file(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        file_path: str,
+        data: bytes,
+    ) -> dict[str, Any]:
+        return await asyncio.to_thread(_write_local_binary_file, runtime.workspace_root, file_path, data)
 
     async def write_internal_text_files(
         self,
@@ -1086,14 +1337,27 @@ class LocalWorkspaceBackend:
         *,
         command: str,
     ) -> None:
+        # 语义模型快照是系统只读派生数据。bash 无法可靠区分读/写意图：
+        # `cd semantic && echo x > a.yaml`、相对路径重定向、脚本间接写都不会暴露
+        # 绝对路径写目标，单纯靠命令文本白名单必然可绕过。因此命令与 cwd 一律
+        # 不向 bash_run 开放，读取改走 file_read / file_grep（后端已把缓存投影进
+        # 逻辑工作区）。sandbox 后端由只读挂载保证，但校验口径保持一致。
         for token in _absolute_command_path_tokens(command):
-            try:
-                if token.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+            if token.startswith(f"{SKILLS_VIRTUAL_ROOT}/"):
+                try:
                     await runtime.resolve_readonly_skill_path_async(token)
-                else:
-                    resolve_workspace_path(runtime.workspace_root, token)
+                except ValueError as exc:
+                    raise ValueError("bash_run 只允许访问当前会话目录或当前用户有权访问的技能路径: " + token) from exc
+                continue
+            try:
+                resolved = resolve_workspace_path(runtime.workspace_root, token)
             except ValueError as exc:
                 raise ValueError("bash_run 只允许访问当前会话目录或当前用户有权访问的技能路径: " + token) from exc
+            if is_managed_semantic_model_workspace_path(runtime.workspace_root, resolved):
+                raise ValueError(
+                    "/mnt/user-data/workspace/.system/semantic/ 是系统只读语义模型快照，"
+                    "bash_run 不允许访问；请用 file_read / file_grep 读取"
+                )
 
     async def run_bash(
         self,
@@ -1111,6 +1375,12 @@ class LocalWorkspaceBackend:
             visible_cwd = raw_cwd
         else:
             local_cwd = resolve_workspace_path(runtime.workspace_root, raw_cwd)
+            # cwd 本身指向语义快照时，命令里的相对路径写入会直接落进生效缓存，
+            # 与 validate_bash_paths 的只读口径必须一致。
+            if is_managed_semantic_model_workspace_path(runtime.workspace_root, local_cwd):
+                raise ValueError(
+                    "bash_run 不允许将 cwd 设置为系统只读语义模型快照目录；请用 file_read / file_grep 读取"
+                )
             visible_cwd = to_visible_path(runtime.workspace_root, local_cwd)
         path_mapping = WorkspacePathMapping(
             workspace_root=runtime.workspace_root,

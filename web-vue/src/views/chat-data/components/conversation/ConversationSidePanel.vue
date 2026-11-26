@@ -67,6 +67,15 @@ const bodyRef = ref<HTMLElement | null>(null)
 const bodyNearBottom = ref(true)
 let bodyMutationObserver: MutationObserver | null = null
 let followFrame: number | null = null
+// 「回到最新」的平滑滚动帧：期间保持跟随态，用户反向滚动时立即让位。
+let latestFrame: number | null = null
+let latestTop = 0
+
+const cancelLatestScroll = () => {
+  if (latestFrame === null) return
+  cancelAnimationFrame(latestFrame)
+  latestFrame = null
+}
 
 const scheduleFollowScroll = () => {
   if (!props.autoFollow || !bodyNearBottom.value || followFrame !== null) return
@@ -79,12 +88,71 @@ const scheduleFollowScroll = () => {
 
 const handleBodyScroll = () => {
   const element = bodyRef.value
-  if (element) bodyNearBottom.value = isScrolledToBottom(element)
+  if (!element) return
+  if (latestFrame !== null) {
+    // 平滑回底途中：用户向上滚就停止动画并交还控制权，否则持续保持跟随态
+    if (element.scrollTop < latestTop) {
+      cancelLatestScroll()
+      // 赋回当前值可中断浏览器原生的平滑滚动动画
+      const interruptedTop = element.scrollTop
+      element.scrollTop = interruptedTop
+      bodyNearBottom.value = isScrolledToBottom(element)
+      return
+    }
+    latestTop = element.scrollTop
+    bodyNearBottom.value = true
+    return
+  }
+  bodyNearBottom.value = isScrolledToBottom(element)
+}
+
+/**
+ * 用户上翻后点「回到最新」：平滑滚到底部，滚动期间不因中间位置把按钮重新弹出；
+ * 停稳后按真实位置校正跟随态。与主对话的 scrollToLatest 同一口径。
+ */
+const scrollToLatest = () => {
+  const element = bodyRef.value
+  if (!element) return
+  cancelLatestScroll()
+  bodyNearBottom.value = true
+  if (typeof element.scrollTo !== 'function') {
+    element.scrollTop = element.scrollHeight
+    return
+  }
+  element.scrollTo({ top: element.scrollHeight, behavior: 'smooth' })
+  latestTop = element.scrollTop
+  // 负初值给出平滑滚动启动宽限，避免起手几帧就被判定为「已停稳」
+  let stableFrames = -6
+  const settle = () => {
+    if (element !== bodyRef.value) {
+      latestFrame = null
+      return
+    }
+    if (element.scrollTop < latestTop) {
+      latestFrame = null
+      bodyNearBottom.value = isScrolledToBottom(element)
+      return
+    }
+    if (element.scrollTop !== latestTop) {
+      latestTop = element.scrollTop
+      stableFrames = 0
+      latestFrame = requestAnimationFrame(settle)
+      return
+    }
+    if (++stableFrames < 2) {
+      latestFrame = requestAnimationFrame(settle)
+      return
+    }
+    latestFrame = null
+    bodyNearBottom.value = isScrolledToBottom(element)
+  }
+  latestFrame = requestAnimationFrame(settle)
 }
 
 const stopFollow = () => {
   bodyMutationObserver?.disconnect()
   bodyMutationObserver = null
+  cancelLatestScroll()
   if (followFrame !== null) {
     cancelAnimationFrame(followFrame)
     followFrame = null
@@ -118,8 +186,26 @@ const syncFollow = async () => {
   if (bodyNearBottom.value) scheduleFollowScroll()
 }
 
-onMounted(() => { void syncFollow() })
-onBeforeUnmount(stopFollow)
+// Esc 兜底关闭：钻到工具详情层后，头部入口可能被遮挡或不可达；
+// 输入框/可编辑区里的 Esc 留给控件自己处理，避免误关面板。
+const handleWindowKeydown = (event: KeyboardEvent) => {
+  if (!props.open || event.key !== 'Escape' || event.defaultPrevented) return
+  const target = event.target
+  if (target instanceof HTMLElement) {
+    const tag = target.tagName
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable) return
+  }
+  emit('close')
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', handleWindowKeydown)
+  void syncFollow()
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleWindowKeydown)
+  stopFollow()
+})
 watch([() => props.autoFollow, () => props.open], () => { void syncFollow() }, { flush: 'post' })
 const isResizing = ref(false)
 const panelRef = ref<HTMLElement | null>(null)
@@ -259,5 +345,20 @@ onBeforeUnmount(stopResize)
     >
       <slot />
     </div>
+
+    <!-- 用户上翻后暂停跟随：显式给一个回到底部的入口，点击后恢复贴底。
+         放在滚动容器外，不随内容滚动，也不占用正文高度。 -->
+    <button
+      v-if="autoFollow && !bodyNearBottom"
+      type="button"
+      class="absolute bottom-4 left-1/2 z-10 inline-flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 shadow-[0_6px_16px_rgba(15,23,42,0.14)] transition-colors hover:border-blue-200 hover:text-[#1677FF]"
+      data-side-panel-latest
+      title="回到最新"
+      aria-label="回到最新"
+      @click="scrollToLatest"
+    >
+      <i class="fa-solid fa-chevron-down text-[10px]"></i>
+      <span>回到最新</span>
+    </button>
   </aside>
 </template>

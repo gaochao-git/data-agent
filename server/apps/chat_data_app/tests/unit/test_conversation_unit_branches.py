@@ -77,6 +77,7 @@ def test_conversation_formatting_helpers():
         "update_time": "2026-01-02 03:04:05",
         "is_favorited": True,
         "run_status": None,
+        "last_finished_at": None,
     }
     assert (
         conversation_module._format_thread(SimpleNamespace(**{**thread.__dict__, "datasource_id": None}))[
@@ -241,6 +242,58 @@ async def test_conversation_sync_get_detail_and_generate_title(conversation_db, 
     monkeypatch.setattr(conversation_module, "update_title", fake_update_title)
     assert await conversation_module.generate_title("conv_sync", "u1") is None
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_conversation_title_cas_does_not_overwrite_user_rename(conversation_db):
+    await seed_conversation("conv_cas")
+
+    assert (
+        await conversation_module.conversation_dao.update_title_if_placeholder(
+            conversation_id="conv_cas",
+            title="自动标题",
+            user_id="u1",
+            placeholders=conversation_module.TITLE_PLACEHOLDERS,
+        )
+        is True
+    )
+    await conversation_module.update_title("conv_cas", "用户标题", user_id="u1")
+    assert (
+        await conversation_module.conversation_dao.update_title_if_placeholder(
+            conversation_id="conv_cas",
+            title="迟到的自动标题",
+            user_id="u1",
+            placeholders=conversation_module.TITLE_PLACEHOLDERS,
+        )
+        is False
+    )
+    thread = await conversation_module.conversation_dao.get_thread("conv_cas", "u1")
+    assert thread.thread_title == "用户标题"
+
+
+@pytest.mark.asyncio
+async def test_schedule_title_generation_runs_in_background(conversation_db, monkeypatch):
+    await seed_conversation("conv_background_title")
+    seen: list[str] = []
+
+    async def fake_generate_title(conversation_id, user_id=None, model_id=None):
+        assert conversation_id == "conv_background_title"
+        return "销售额分析"
+
+    async def on_updated(title: str):
+        seen.append(title)
+
+    monkeypatch.setattr(conversation_module, "generate_title", fake_generate_title)
+    conversation_module.schedule_title_generation(
+        conversation_id="conv_background_title",
+        user_id="u1",
+        on_updated=on_updated,
+    )
+    task = conversation_module._TITLE_TASKS["conv_background_title"]
+    await asyncio.wait_for(task, timeout=1)
+
+    assert seen == ["销售额分析"]
+    assert "conv_background_title" not in conversation_module._TITLE_TASKS
 
 
 @pytest.mark.asyncio
@@ -538,3 +591,17 @@ async def test_conversation_generate_title_unusable_output_keeps_placeholder(con
     assert await conversation_module.generate_title("conv_title_retry", "u1") == "IP攻击来源分析咨询"
     thread = await conversation_module.conversation_dao.get_thread("conv_title_retry", "u1")
     assert thread.thread_title == "IP攻击来源分析咨询"
+
+
+@pytest.mark.asyncio
+async def test_conversation_list_exposes_last_finished_at(conversation_db, monkeypatch):
+    await seed_conversation("conv_finished", title="已完成")
+    finished_at = datetime(2026, 11, 12, 17, 0, 0)
+
+    async def finished(_ids, _user_id):
+        return {"conv_finished": finished_at}
+
+    monkeypatch.setattr(conversation_module.conversation_dao, "list_latest_finished_run_times", finished)
+    listed = await conversation_module.list_conversations("agent_a", user_id="u1")
+    # 返回带时区偏移的 ISO 时间，前端可直接 Date.parse，不再依赖浏览器本地时区。
+    assert datetime.fromisoformat(listed[0]["last_finished_at"]) == finished_at.astimezone()

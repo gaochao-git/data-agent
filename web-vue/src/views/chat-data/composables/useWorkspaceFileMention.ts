@@ -4,13 +4,13 @@ type ReactiveValue<T> = Ref<T> | ComputedRef<T>
 
 /** 输入框 @ 引用共用的工作区文件展示子集；ConversationWorkspaceFile 是其超集。 */
 export interface WorkspaceFilePick {
-  /** 会话工作区相对路径（uploads/xxx.pdf、workspace/semantic/a__1b2.yaml）。 */
+  /** 会话工作区相对路径（uploads/xxx.pdf、workspace/.system/semantic/a__1b2.yaml）。 */
   relativePath: string
   /** 文件名（末级路径段），chip 与菜单主标题。 */
   name: string
 }
 
-/** 文件名后面展示的目录路径（含末尾斜杠），如 uploads/、workspace/semantic/。 */
+/** 文件名后面展示的目录路径（含末尾斜杠），如 uploads/、workspace/.system/semantic/。 */
 export const workspaceFileDirPath = (file: WorkspaceFilePick): string => (
   file.relativePath.slice(0, file.relativePath.length - file.name.length)
 )

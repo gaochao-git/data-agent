@@ -6,8 +6,9 @@
 
 - ``TOOL_BUILD_GROUPS``：有哪些工具、按什么顺序注册（顺序即模型看到的工具顺序）、
   各自提供哪些工具名（``provides``，与 ``@tool`` 注册名一致，供权限排除匹配）；
-- ``ToolBuildContext``：一次装配的上下文（运行选项、工作区运行时、身份与数据源）；
-- 子智能体工具白名单：由 ``data_agent.SUBAGENT_TOOL_ALLOWLISTS`` 显式声明，
+- ``ToolBuildContext``：一次装配的上下文（运行选项、工作区运行时、身份与业务上下文）；
+- 子智能体工具面：explore 由 ``data_agent.SUBAGENT_TOOL_ALLOWLISTS`` 只读白名单
+  兜底；general 默认继承主图可用工具，由 ``SUBAGENT_TOOL_DENYLISTS`` 显式剔除。
   配套 ``provided_tool_names()`` 与 ``tests/unit/test_tools_registry.py`` 护栏。
 
 与 ``utils/builtin_skills.py`` 的分工：那里登记技能名，这里登记工具名；
@@ -32,6 +33,7 @@ from .ask_user_question import ask_user_question_tool
 from .bash_run import create_bash_run_tool
 from .calculator import calculator_tool
 from .current_time import get_current_time_tool
+from .data2image import create_data2image_tool
 from .data_analyzing import create_data_analyzing_tool
 from .filesystem import create_filesystem_tools
 from .officecli_run import create_officecli_run_tool
@@ -42,7 +44,8 @@ from .read_image import create_read_image_tool
 from .skill import create_skill_tool
 
 if TYPE_CHECKING:
-    from ..data_agent import DatasourceContext, IdentityContext, ModelInvocationConfig
+    from ..contracts.business_context import BusinessContext
+    from ..data_agent import IdentityContext, ModelInvocationConfig
     from ..runtime_options import AgentRuntimeOptions
     from ..workspace.runtime import ConversationWorkspaceRuntime
 
@@ -51,14 +54,14 @@ if TYPE_CHECKING:
 class ToolBuildContext:
     """一次工具装配的上下文，由 ``data_agent.assemble_tools`` 解析后传入。
 
-    身份/数据源/模型调用三个上下文类型定义在 ``data_agent``（调用方也从此导入），
+    身份/业务上下文/模型调用三个上下文类型分属 ``data_agent`` 与 ``contracts``，
     这里仅作类型标注引用，避免模块级循环导入。
     """
 
     runtime_options: AgentRuntimeOptions
     workspace_runtime: ConversationWorkspaceRuntime
     identity: IdentityContext
-    datasource: DatasourceContext
+    business: BusinessContext
     model_invocation: ModelInvocationConfig
 
 
@@ -105,6 +108,11 @@ TOOL_BUILD_GROUPS: tuple[ToolBuildGroup, ...] = (
         note="读取工作区图片供多模态模型查看",
     ),
     ToolBuildGroup(
+        provides=("data2image",),
+        build=lambda ctx: create_data2image_tool(ctx.workspace_runtime),
+        note="结果文件转折线图 PNG 供视觉分析降上下文",
+    ),
+    ToolBuildGroup(
         provides=("present_artifacts",),
         build=lambda ctx: [create_present_artifacts_tool(ctx.workspace_runtime)],
         note="向用户呈现最终产物（仅主智能体）",
@@ -127,7 +135,7 @@ TOOL_BUILD_GROUPS: tuple[ToolBuildGroup, ...] = (
             if ontology_query_mode_active() and not hybrid_query_mode_enabled()
             else [
                 create_data_analyzing_tool(
-                    ctx.datasource.datasource_id,
+                    ctx.business.get("datasource_id"),
                     user_id=ctx.identity.user_id or "system",
                     operator_name=ctx.identity.operator_name,
                     workspace_runtime=ctx.workspace_runtime,
@@ -141,7 +149,7 @@ TOOL_BUILD_GROUPS: tuple[ToolBuildGroup, ...] = (
         # 本体工具仅在「判定为有本体」的业务域装配：语义模式下即使功能开关打开也
         # 不挂载（目录与工具必须二选一）。工具实现内保留开关 raise 作为纵深防御。
         build=lambda ctx: (
-            [create_ontology_tool(ctx.datasource.datasource_id, user_id=ctx.identity.user_id or "system")]
+            [create_ontology_tool(ctx.business.get("datasource_id"), user_id=ctx.identity.user_id or "system")]
             if ontology_query_mode_active() and (object_type_locator_enabled() or ontology_object_read_enabled())
             else []
         ),
@@ -170,7 +178,14 @@ TOOL_BUILD_GROUPS: tuple[ToolBuildGroup, ...] = (
 )
 
 
-MIDDLEWARE_INJECTED_APPROVAL_TOOLS = frozenset({"write_todos", "task", "mcp_tool_search", "mcp_tool_call"})
+MIDDLEWARE_INJECTED_APPROVAL_TOOLS = frozenset(
+    {
+        "write_todos",
+        "subagent",
+        "mcp_tool_search",
+        "mcp_tool_call",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -202,6 +217,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
     "dir_delete": ToolDefinition(approval="allow", risk="high", display_name="删除目录"),
     "parse_document": ToolDefinition(approval="allow", risk="low", display_name="解析文档"),
     "read_image": ToolDefinition(approval="allow", risk="low", display_name="读取图片"),
+    "data2image": ToolDefinition(approval="allow", risk="low", display_name="数据转折线图"),
     "present_artifacts": ToolDefinition(
         approval="allow",
         risk="low",
@@ -243,7 +259,7 @@ TOOL_DEFINITIONS: dict[str, ToolDefinition] = {
         enabled=False,
     ),
     "write_todos": ToolDefinition(approval="allow", risk="low", display_name="更新任务计划"),
-    "task": ToolDefinition(approval="allow", risk="low", display_name="派发子智能体"),
+    "subagent": ToolDefinition(approval="allow", risk="low", display_name="子智能体"),
     "mcp_tool_search": ToolDefinition(approval="allow", risk="medium", display_name="搜索 MCP 工具"),
     "mcp_tool_call": ToolDefinition(approval="allow", risk="high", display_name="调用 MCP 工具"),
 }

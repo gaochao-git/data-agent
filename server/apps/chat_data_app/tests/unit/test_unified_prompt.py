@@ -71,9 +71,9 @@ def test_removed_workflow_blocks_are_absent_and_environment_keeps_tree():
 
     assert "## 环境" in prompt
     assert "├── workspace/" in prompt
-    assert "└── semantic/" in prompt
-    assert "query_result/  查询结果卸载文件" in prompt
-    assert ".tool-offload/ 其它工具大结果卸载文件" in prompt
+    assert "└── .system/" in prompt
+    assert "├── query_result/  查询结果卸载文件" in prompt
+    assert "└── tool-offload/  其它工具大结果卸载文件" in prompt
     assert "└── uploads/     上传区（只读，不可写）" in prompt
 
 

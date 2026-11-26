@@ -255,14 +255,36 @@ async def test_prepare_pending_run_returns_none_for_ineligible_runs():
 
 
 @pytest.mark.asyncio
+async def test_prepare_pending_run_does_not_fallback_to_user_id_for_username():
+    """Run 缺 username 时保持空值，插件 selected 授权必须 fail-closed。"""
+    run = _run(record_status="pending")
+    service = _service(
+        get_run_by_id=run,
+        lock_thread=SimpleNamespace(),
+        get_run_by_id_for_update=run,
+        get_active_run=None,
+    )
+
+    prepared = await service.prepare_pending_run("r1")
+
+    assert prepared is not None
+    assert prepared["operator_name"] == ""
+
+
+@pytest.mark.asyncio
 async def test_reap_expired_runs_skips_missing_and_collects():
     assert await _service(list_expired_runs=[_run()]).reap_expired_runs() == []
 
     expired = _run(lease_expire_time=NOW.replace(year=2020))
     service = _service(list_expired_runs=[expired], get_run_by_id_for_update=expired)
+    assert await service.reap_expired_runs() == []
+    assert expired.record_status == "interrupting"
+    content = json.loads(expired.record_content)
+    content["reap_deadline_ms"] = 1
+    expired.record_content = json.dumps(content)
     results = await service.reap_expired_runs()
     assert len(results) == 1
-    assert results[0].status == "failed"
+    assert results[0].status == "interrupted"
 
 
 @pytest.mark.asyncio
@@ -274,9 +296,17 @@ async def test_reap_expired_runs_drops_candidates_nobody_can_close():
 
 
 @pytest.mark.asyncio
-async def test_finish_run_requeues_only_terminal_failures():
+async def test_finish_run_requeues_terminal_failures():
     service = _service(get_run_by_id_for_update=_run(record_status="active"))
     assert await service.finish_run("r1", "failed", "user-1", "用户一", "tok-1") == "failed"
+    assert "requeue_messages" in service._dao.calls
+
+    service = _service(get_run_by_id_for_update=_run(record_status="active"))
+    assert await service.finish_run("r1", "interrupted", "user-1", "用户一", "tok-1") == "interrupted"
+    assert "requeue_messages" in service._dao.calls
+
+    service = _service(get_run_by_id_for_update=_run(record_status="cancelling"))
+    assert await service.finish_run("r1", "interrupted", "user-1", "用户一", "tok-1") == "cancelled"
     assert "requeue_messages" in service._dao.calls
 
     service = _service(get_run_by_id_for_update=_run(record_status="active"))
@@ -336,6 +366,11 @@ async def test_reap_expired_run_keeps_waiting_user_and_drops_others():
         record_content=json.dumps({"pending_question": {"question_id": "q"}}),
     )
     assert await service._reap_expired_run(None, waiting, NOW, "u", "n") is waiting
+    assert waiting.record_status == "interrupting"
+    content = json.loads(waiting.record_content)
+    content["reap_deadline_ms"] = 1
+    waiting.record_content = json.dumps(content)
+    assert await service._reap_expired_run(None, waiting, NOW, "u", "n") is waiting
     assert waiting.record_status == "waiting_user"
 
     cancelling = _run(record_status="cancelling", lease_expire_time=NOW.replace(year=2020))
@@ -347,7 +382,7 @@ async def test_reap_expired_run_keeps_waiting_user_and_drops_others():
 async def test_heartbeat_run_competition_paths():
     assert await _service(renew_run_lease=False, get_run_by_id=None).heartbeat_run("r1", "tok-1") == "inactive"
     terminal = _service(renew_run_lease=False, get_run_by_id=_run(record_status="finished"))
-    assert await terminal.heartbeat_run("r1", "tok-1") == "inactive"
+    assert await terminal.heartbeat_run("r1", "tok-1") == "finished"
     cancelling = _service(renew_run_lease=False, get_run_by_id=_run(record_status="cancelling"))
     assert await cancelling.heartbeat_run("r1", "tok-1") == "cancelling"
     still_owner = _service(renew_run_lease=False, get_run_by_id=_run(record_status="active"))
@@ -462,8 +497,16 @@ async def test_enqueue_message_validation():
 
 @pytest.mark.asyncio
 async def test_mark_consumed_guards():
-    await _service().mark_consumed("r1", [], "tok-1")  # 空列表：直接返回
-    await _service().mark_consumed("r1", ["m1"], "tok-1")  # Run 不存在：静默返回
+    """空列表 / Run 不存在时都不触碰消息行，只按各自路径早返回。"""
+    empty = _service()
+    await empty.mark_consumed("r1", [], "tok-1")
+    assert empty._dao.calls == []  # 连 DB session 都没进
+
+    missing = _service()
+    await missing.mark_consumed("r1", ["m1"], "tok-1")
+    # 读到 Run 不存在即返回，没有 claim / 状态改写等后续 DAO 调用
+    assert missing._dao.calls == ["now", "get_run_by_id_for_update"]
+    assert "get_claimed_messages" not in missing._dao.calls
 
 
 @pytest.mark.asyncio

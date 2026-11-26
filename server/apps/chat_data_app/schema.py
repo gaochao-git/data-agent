@@ -707,6 +707,14 @@ class SkillImportFromWorkspaceRequest(BaseModel):
     skill_dir_path: str = Field(..., min_length=1, max_length=500, description="工作区技能目录路径")
 
 
+class ConversationWorkspaceFileSaveRequest(BaseModel):
+    """会话工作区文本文件保存请求。"""
+
+    path: str = Field(..., min_length=1, max_length=500, description="工作区规范路径")
+    content: str = Field(default="", description="完整文件内容")
+    expected_mtime: float = Field(..., ge=0, description="读取时的文件修改时间（秒级 Unix 时间戳）")
+
+
 class DatasourceSourceItem(BaseModel):
     """数据源连接项"""
 
@@ -1220,7 +1228,7 @@ class _CheckYamlActionPayload(BaseModel):
         if isinstance(data, dict) and "yaml_content" in data:
             raise ValueError(
                 "check_yaml 不再接受 yaml_content 全文参数，请改传文件路径："
-                '{"file_path": "/mnt/user-data/workspace/semantic/<模型文件>.yaml"}'
+                '{"file_path": "/mnt/user-data/workspace/.system/semantic/<模型文件>.yaml"}'
             )
         return data
 
@@ -1521,12 +1529,10 @@ class OntologyActionSubmissionCondition(BaseModel):
     """单条提交条件：主体 + 算子 + 比较值 + 失败文案"""
 
     subject: OntologyActionSubmissionSubject = Field(..., description="判定主体")
-    operator: Literal[
-        "is", "is_not", "gt", "gte", "lt", "lte", "in", "includes_any", "is_null", "is_not_null"
-    ] = Field(..., description="比较算子")
-    value: OntologyActionTypeEditValue | None = Field(
-        default=None, description="比较值（is_null/is_not_null 时省略）"
+    operator: Literal["is", "is_not", "gt", "gte", "lt", "lte", "in", "includes_any", "is_null", "is_not_null"] = Field(
+        ..., description="比较算子"
     )
+    value: OntologyActionTypeEditValue | None = Field(default=None, description="比较值（is_null/is_not_null 时省略）")
     failure_message: str = Field(..., min_length=1, max_length=512, description="不满足时展示给用户的文案")
 
 
@@ -1534,9 +1540,7 @@ class OntologyActionSubmissionCriteria(BaseModel):
     """提交条件：决定这次提交允不允许（对齐官方 submission criteria）"""
 
     logic: Literal["all", "any"] = Field(default="all", description="条件组合逻辑")
-    conditions: list[OntologyActionSubmissionCondition] = Field(
-        ..., min_length=1, max_length=10, description="条件项"
-    )
+    conditions: list[OntologyActionSubmissionCondition] = Field(..., min_length=1, max_length=10, description="条件项")
 
 
 class OntologyActionTypeUpsertRequest(BaseModel):

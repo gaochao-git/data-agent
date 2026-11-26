@@ -4,8 +4,8 @@
  * 左侧展示流式消息与工具调用，右侧展示当前工具结果和工作区产物预览。
  */
 import { computed, nextTick, onMounted, onUnmounted, ref, toRef, watch } from 'vue'
-import { ElMessage } from 'element-plus'
-import type { ChatDataContextCompressionEvent, ChatDataTokenUsage, DashboardSpecPayload, DataSource, ExecutionTargetOption, LangGraphMessage, Message, MessageAttachment, PendingUserQuestion, SemanticYamlFile, SkillInfo, SubagentCompaction, SubagentContextUsage, SubagentTrailItem, ThinkingSegment, ToolCallInfo, ToolLifecycleEventData, UserQuestionAnswer } from '../../types'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import type { ChatDataContextCompressionEvent, ChatDataTokenUsage, DashboardSpecPayload, DataSource, DocumentAnnotation, ExecutionTargetOption, LangGraphMessage, Message, MessageAttachment, PendingUserQuestion, SemanticYamlFile, SkillInfo, SubagentCompaction, SubagentContextUsage, SubagentTaskRecord, SubagentTrailItem, ThinkingSegment, ToolCallInfo, ToolLifecycleEventData, UserQuestionAnswer } from '../../types'
 import { useSqlGenerator, type RunDoneStatus } from '../../composables/useSqlGenerator'
 import { useConversationHistory } from '../../composables/useConversationHistory'
 import { useModelOptions } from '../../composables/useModelOptions'
@@ -13,8 +13,13 @@ import { useSaveToPanel } from '../../composables/useSaveToPanel'
 import { useSkillCommandMenu } from '../../composables/useSkillCommandMenu'
 import { useWorkspaceFileMention, type WorkspaceFilePick } from '../../composables/useWorkspaceFileMention'
 import { useQuotedSnippets } from '../../composables/useQuotedSnippets'
-import { answerUserQuestion, cancelConversationRun, cancelSteerMessage, cancelUserQuestion, createDashboardFromSpec, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceRawFile, getPendingUserQuestion, importConversationWorkspaceSkill, listSteerMessages, steerConversation, streamRunEvents, updateSteerMessage, uploadFile } from '../../api'
+import { useSubagentTasks } from '../../composables/useSubagentTasks'
+import { useBackgroundRunWakeup } from '../../composables/useBackgroundRunWakeup'
+import { toDocumentAnnotationRequests, useDocumentAnnotations } from '../../composables/useDocumentAnnotations'
+import { useSseReconnect } from '../../composables/useSseReconnect'
+import { answerUserQuestion, cancelConversationRun, cancelSteerMessage, cancelUserQuestion, createDashboardFromSpec, deleteUploadedFile, getConversationWorkspaceFileContent, getConversationWorkspaceFiles, getConversationWorkspaceRawFile, getPendingUserQuestion, importConversationWorkspaceSkill, getRunState, steerConversation, streamRunEvents, updateSteerMessage, uploadFile } from '../../api'
 import type { Dashboard } from '../../api/dashboard'
+import { settleUploadedPlaceholder, type PendingFile } from '../../utils/pendingFiles'
 import QuickQueries, { type FallbackQuery } from '../QuickQueries.vue'
 import ChartSpecRenderer from '../ChartSpecRenderer.vue'
 import SkillManager from './SkillManager.vue'
@@ -27,14 +32,18 @@ import SkillCommandMenu from './SkillCommandMenu.vue'
 import WorkspaceFileMentionMenu from './WorkspaceFileMentionMenu.vue'
 import PresentedFileArtifacts from './PresentedFileArtifacts.vue'
 import SaveToPanelModal from '../SaveToPanelModal.vue'
+import { useConversationReplay } from '../../composables/useConversationReplay'
 import { parseDateTimeValue, formatLocalDateTime, toGenerationStats } from '../../utils'
 import { normalizeToolCallForDisplay, shouldInlineRenderQueryResult } from '../../utils/semanticTool'
 import { admitInboxMessages, reconcileInboxSnapshot, type InboxQueueItem, type InboxQueueType } from '../../utils/inboxQueue'
 import UserQuestionCard from './UserQuestionCard.vue'
 import AnalysisProgress from './AnalysisProgress.vue'
+import ConversationReconnectBanner from './ConversationReconnectBanner.vue'
 import { deriveAnalysisTodos, shouldShowAnalysisProgress } from '../../utils/analysisTodos'
 import { createTopReachTracker } from '../../utils/scrollReach'
-import { applySubagentCompactionToTool, buildSubagentCompactionRecord } from '../../utils/subagentCompaction'
+import { applySubagentCompactionStartedToTool, applySubagentCompactionToTool, buildSubagentCompactionRecord } from '../../utils/subagentCompaction'
+import { applySubagentTrailEvent } from '../../utils/subagentTrail'
+import { mergeToolCallFromMessage } from '../../utils/messageView'
 import { isScrolledToBottom } from '../../utils/scrollFollow'
 import { normalizeVisiblePath } from '../../utils/consoleFileTree'
 import {
@@ -71,7 +80,6 @@ interface Props {
   /** 工作区 yaml「导入为语义模型」行操作的可见性（管理员权限，与配置入口同源） */
   canImportSemanticModel?: boolean
 }
-
 const props = withDefaults(defineProps<Props>(), {
   datasource: null,
   executionTargets: () => [],
@@ -80,21 +88,23 @@ const props = withDefaults(defineProps<Props>(), {
   selectedModelId: '',
   canImportSemanticModel: false,
 })
-
 const emit = defineEmits<{
   firstMessageStarted: [conversationId: string]
-  runStatusChanged: [conversationId: string, status: 'pending' | 'active' | 'cancelling' | 'waiting_user' | null]
+  runStatusChanged: [conversationId: string, status: 'pending' | 'active' | 'cancelling' | 'interrupting' | 'waiting_user' | null]
+  conversationTitleChanged: [conversationId: string, title: string]
   'update:selectedMemberDatasourceIds': [value: string[]]
   'update:selectedModelId': [value: string]
+  /** 用户手选模型（不含历史/运行中回填），页面据此更新新会话的默认选择。 */
+  modelPicked: [value: string]
   dashboardCreated: [dashboard: Dashboard]
   /** 控制台面板可见性广播：页面右上角的控制台开关按钮据此切换图标与提示。 */
   consoleVisibilityChanged: [visible: boolean]
+  /** 运行中子智能体数量广播：右上角开关角标据此展示，用户无需展开侧栏也能感知后台任务。 */
+  subagentActiveCountChanged: [count: number]
   /** 工作区 yaml 一键导入：由页面层直接打开 Ossie 导入弹窗并预置文件 */
   importSemanticYaml: [files: SemanticYamlFile[]]
 }>()
-
 const { generateSqlStream, stopGeneration } = useSqlGenerator()
-
 // 模型列表与运行时配置：与其他入口共用同一份加载逻辑；审批策略不提供前端切换。
 const { modelOptions, load: loadModelOptions } = useModelOptions()
 const selectedModel = computed({
@@ -110,7 +120,6 @@ watch(selectedModel, () => {
   enableDeepThinking.value = null
   thinkingEffort.value = null
 })
-
 const messages = ref<Message[]>([])
 const input = ref('')
 const inputFocused = ref(false)
@@ -122,7 +131,7 @@ const editingSteerDraft = ref('')
 const steerActionBusy = ref(false)
 const hasActiveRun = ref(false)
 /** Run 活跃状态的合法取值：与 runStatusChanged emit 的契约保持一致。 */
-type RunActiveStatus = 'pending' | 'active' | 'cancelling' | 'waiting_user'
+type RunActiveStatus = 'pending' | 'active' | 'cancelling' | 'interrupting' | 'waiting_user'
 const activeRunStatus = ref<RunActiveStatus | null>(null)
 const activeRunTurnId = ref<string | null>(null)
 const activeRunIsContinuation = ref(false)
@@ -130,6 +139,8 @@ const ownedRunStorageKey = 'chatdata:active-run-conversation'
 const activeRunId = ref<string | null>(null)
 const activeRunEventId = ref('0-0')
 const activeRunResumeRunId = ref<string | null>(null)
+/** 恢复运行时的真实起点（服务端落库的点击墙钟），优先于历史消息时间戳 */
+const activeRunStartedAtMs = ref<number | null>(null)
 let steerRestoreTimer: ReturnType<typeof setInterval> | null = null
 const pendingSteerMessages = ref<InboxQueueItem[]>([])
 const pendingUserQuestion = ref<PendingUserQuestion | null>(null)
@@ -140,7 +151,6 @@ const tokenUsage = ref<ChatDataTokenUsage | null>(null)
 const tokenUsagePanelRef = ref<InstanceType<typeof ConversationTokenUsage> | null>(null)
 const hasLocalConversationStarted = ref(false)
 const chatContainerRef = ref<HTMLDivElement | null>(null)
-
 /**
  * Run 是否处于"执行中"的统一视图：本地 SSE 订阅（isGenerating）与
  * 刷新/SSE 断开后从服务端恢复的活跃 Run（hasActiveRun）必须表现一致，
@@ -155,7 +165,6 @@ const inputBarRef = ref<InstanceType<typeof ConversationInputBar> | null>(null)
 const focusInput = () => {
   inputBarRef.value?.focus()
 }
-
 const admitPendingMessages = (messageIds: string[]) => {
   if (!messageIds.length) return
   const active = activeAssistantMessageId.value
@@ -171,7 +180,6 @@ const admitPendingMessages = (messageIds: string[]) => {
     if (editingSteerId.value === messageId) cancelEditSteer()
   }
 }
-
 /**
  * done 已经代表后端完成了当前 Run 的收口。这里仅同步本地 UI，不能再用
  * GET /steer 重新确认同一个终态；下一轮由 done.next_run_id 直接订阅。
@@ -183,14 +191,13 @@ const applyRunDoneState = (
   currentRunId: string | null,
 ) => {
   stopSteerRestorePolling()
+  stopSseReconnect()
   isStoppingRun.value = false
-
   if (status !== 'waiting_user') {
     // Run 已收口（finished/failed/cancelled）时，旧审批卡一律失效，
     // 避免用户面对一个再也提交不成功的历史问题卡。
     pendingUserQuestion.value = null
   }
-
   if (status === 'finished') {
     finalizeUnfinishedToolCalls('completed')
     finishStreamingMessages()
@@ -201,6 +208,11 @@ const applyRunDoneState = (
     activeAssistantMessageId.value = null
   } else if (status === 'waiting_user') {
     finishStreamingMessages()
+  } else if (status === 'interrupted') {
+    finalizeUnfinishedToolCalls('error', '服务重启')
+    finishStreamingMessages()
+    activeAssistantMessageId.value = null
+    setActiveAssistantError('任务因服务重启中断，请重新发起')
   } else if (status === 'failed') {
     // 模型挂起等失败终态经 fallback done 到达时没有 error 事件兜底，
     // 必须在这里收尾占位消息，否则「正在处理...」会一直转下去。
@@ -208,7 +220,6 @@ const applyRunDoneState = (
     finishStreamingMessages()
     setActiveAssistantError('本轮执行失败，请重试')
   }
-
   if (status === 'finished' && nextRunId) {
     hasActiveRun.value = true
     activeRunId.value = nextRunId
@@ -221,7 +232,6 @@ const applyRunDoneState = (
     emit('runStatusChanged', conversationId, 'pending')
     return
   }
-
   if (status === 'waiting_user') {
     hasActiveRun.value = true
     activeRunStatus.value = 'waiting_user'
@@ -232,10 +242,9 @@ const applyRunDoneState = (
     emit('runStatusChanged', conversationId, 'waiting_user')
     return
   }
-
   // failed/cancelled 会把未确认消费的消息退回 pending；本地队列已有这些
   // 消息时直接更新状态，避免为展示状态再发一次网络请求。
-  if (status === 'failed' || status === 'cancelled') {
+  if (status === 'failed' || status === 'cancelled' || status === 'interrupted') {
     pendingSteerMessages.value = pendingSteerMessages.value.map(item => (
       item.status === 'claimed' ? { ...item, status: 'pending' } : item
     ))
@@ -247,16 +256,15 @@ const applyRunDoneState = (
   activeRunIsContinuation.value = false
   activeRunEventId.value = '0-0'
   activeRunResumeRunId.value = null
+  activeRunStartedAtMs.value = null
   clearOwnedRun(currentRunId || undefined)
   emit('runStatusChanged', conversationId, null)
 }
-
 const startEditSteerMessage = (item: { content: string; messageId?: string }) => {
   if (!item.messageId || editingSteerId.value === item.messageId) return
   editingSteerId.value = item.messageId
   editingSteerDraft.value = item.content
 }
-
 /** 以服务端状态和持久历史共同恢复队列，不以 pending 暂时缺失作为删除依据。 */
 const restorePendingSteerQueue = async (options?: {
   restartPolling?: boolean
@@ -266,7 +274,7 @@ const restorePendingSteerQueue = async (options?: {
   const conversationId = localConversationId.value || props.conversationId
   if (!conversationId) return
   try {
-    const response = await listSteerMessages(conversationId)
+    const response = await getRunState(conversationId)
     const serverMessages = response.data?.messages ?? []
     hasActiveRun.value = Boolean(response.data?.has_active_run)
     activeRunId.value = response.data?.run_id || null
@@ -309,7 +317,7 @@ const restorePendingSteerQueue = async (options?: {
       options?.applyTerminal
       && !hasActiveRun.value
       && terminalStatus
-      && ['finished', 'failed', 'cancelled', 'waiting_user'].includes(terminalStatus)
+      && ['finished', 'failed', 'cancelled', 'interrupted', 'waiting_user'].includes(terminalStatus)
     ) {
       applyRunDoneState(
         conversationId,
@@ -325,7 +333,6 @@ const restorePendingSteerQueue = async (options?: {
     startSteerRestorePolling()
   }
 }
-
 const restorePendingUserQuestion = async () => {
   const conversationId = localConversationId.value || props.conversationId
   if (!conversationId) return
@@ -340,7 +347,6 @@ const restorePendingUserQuestion = async () => {
     // 恢复失败保留当前卡片，避免网络抖动导致问题消失。
   }
 }
-
 const recoverInterruptedPageRun = async () => {
   while (isLoadingHistory.value) {
     await new Promise(resolve => window.setTimeout(resolve, 50))
@@ -352,7 +358,8 @@ const recoverInterruptedPageRun = async () => {
   const runId = activeRunId.value
   // 「用时」起点种子：正在生成的 run 在历史消息里有服务端盖章的用户消息时间戳
   // （= 客户端点击时刻），恢复订阅时从它起算，避免 ticker 从 0 重计。
-  const elapsedSeedMs = [...messages.value].reverse().find(item => item.role === 'user')?.timestamp?.getTime()
+  const elapsedSeedMs = activeRunStartedAtMs.value
+    ?? [...messages.value].reverse().find(item => item.role === 'user')?.timestamp?.getTime()
   await submitAnalysisQuery('', {
       appendUserMessage: false,
       preserveAssistant: !activeRunIsContinuation.value,
@@ -365,7 +372,39 @@ const recoverInterruptedPageRun = async () => {
     ),
   })
 }
-
+/**
+ * 自动重连只做 SSE 重订阅：已有 run_id/last_event_id 时不再查 /steer，
+ * 避免断流期间每次重试都走恢复快照。缺少运行信息时才回退到页面恢复入口。
+ */
+const resubscribeActiveRun = async () => {
+  const conversationId = localConversationId.value || props.conversationId
+  const runId = activeRunId.value
+  if (!conversationId || !runId) {
+    await recoverInterruptedPageRun()
+    return
+  }
+  if (activeRunStatus.value === 'waiting_user' || activeRunStatus.value === 'cancelling' || activeRunStatus.value === 'interrupting') return
+  const elapsedSeedMs = activeRunStartedAtMs.value
+    ?? [...messages.value].reverse().find(item => item.role === 'user')?.timestamp?.getTime()
+  await submitAnalysisQuery('', {
+    appendUserMessage: false,
+    preserveAssistant: !activeRunIsContinuation.value,
+    elapsedSeedMs,
+    responseFactory: signal => streamRunEvents(conversationId, runId, activeRunEventId.value, signal),
+  })
+}
+const { start: startSseReconnect, stop: stopSseReconnect, markActivity: markSseActivity, signalDisconnect: signalSseDisconnect, state: reconnectState } = useSseReconnect({
+  isGenerating,
+  hasActiveRun,
+  hasRunId: activeRunId,
+  stopGeneration,
+  recover: resubscribeActiveRun,
+  onUnknown: () => {
+    stopGeneration()
+    isGenerating.value = false
+    setActiveAssistantError('无法确认任务状态，请刷新后重试')
+  },
+})
 const readOwnedRun = (): { conversationId: string; runId: string } | null => {
   const raw = window.sessionStorage.getItem(ownedRunStorageKey)
   if (!raw) return null
@@ -378,29 +417,24 @@ const readOwnedRun = (): { conversationId: string; runId: string } | null => {
   window.sessionStorage.removeItem(ownedRunStorageKey)
   return null
 }
-
 const saveOwnedRun = (conversationId: string, runId: string) => {
   window.sessionStorage.setItem(ownedRunStorageKey, JSON.stringify({ conversationId, runId }))
 }
-
 const clearOwnedRun = (runId?: string) => {
   const owned = readOwnedRun()
   if (!runId || owned?.runId === runId) window.sessionStorage.removeItem(ownedRunStorageKey)
 }
-
 const reconcileOwnedRunMarker = (conversationId: string) => {
   const owned = readOwnedRun()
   if (!owned || owned.conversationId !== conversationId) return
   if (activeRunId.value !== owned.runId || !hasActiveRun.value) clearOwnedRun(owned.runId)
 }
-
 const stopSteerRestorePolling = () => {
   if (steerRestoreTimer) {
     window.clearInterval(steerRestoreTimer)
     steerRestoreTimer = null
   }
 }
-
 /** 刷新页面后模型仍在运行时，轮询同步队列消费状态。 */
 const startSteerRestorePolling = () => {
   stopSteerRestorePolling()
@@ -414,7 +448,6 @@ const startSteerRestorePolling = () => {
     restorePendingSteerQueue({ restartPolling: false, applyTerminal: true })
   }, 5000)
 }
-
 const saveEditSteerMessage = async (item: { messageId?: string; content: string }) => {
   const conversationId = localConversationId.value || props.conversationId
   if (!item.messageId || !conversationId || steerActionBusy.value) return
@@ -436,12 +469,10 @@ const saveEditSteerMessage = async (item: { messageId?: string; content: string 
     steerActionBusy.value = false
   }
 }
-
 const cancelEditSteer = () => {
   editingSteerId.value = null
   editingSteerDraft.value = ''
 }
-
 const toggleSteerMessageQueueType = async (item: { messageId?: string; queueType: InboxQueueType }) => {
   const conversationId = localConversationId.value || props.conversationId
   if (!item.messageId || !conversationId || steerActionBusy.value) return
@@ -457,7 +488,6 @@ const toggleSteerMessageQueueType = async (item: { messageId?: string; queueType
     steerActionBusy.value = false
   }
 }
-
 const removePendingSteerMessage = async (item: { clientId: string; messageId?: string }) => {
   const conversationId = localConversationId.value || props.conversationId
   if (steerActionBusy.value || !conversationId) return
@@ -476,48 +506,33 @@ const removePendingSteerMessage = async (item: { clientId: string; messageId?: s
     steerActionBusy.value = false
   }
 }
-
 onMounted(() => {
   focusInput()
   void recoverInterruptedPageRun()
   restorePendingUserQuestion()
 })
-
 onUnmounted(() => {
   stopSteerRestorePolling()
+  stopSseReconnect()
   stopLiveGenerationSpeed()
   // 卸载时中止主 SSE 流:useSqlGenerator 对 AbortError 静默返回,不会误报错误
   stopGeneration()
 })
 const isNearBottom = ref(true)
-
 // ---- 文件上传 ----
 // 上传格式/大小上限统一在 utils/uploadLimits.ts（与工作区面板上传共用），文本渲染上限随面板拆到子组件。
 // 用户输入超过该字符数时自动转为 .md 文件附件上传，避免上下文过长
 const MAX_INPUT_CHARS = 4000
-interface PendingFile {
-  file_id: string
-  filename: string
-  status: 'uploading' | 'uploaded' | 'failed'
-  file_type?: string
-  file_size?: number
-  // 上传后实际存储文件名（去重后可能与 filename 不同），用于拼装可访问路径
-  storage_dir?: string
-}
 const pendingFiles = ref<PendingFile[]>([])
 const fileInputRef = ref<HTMLInputElement | null>(null)
-
 const hasParsingFiles = computed(() => pendingFiles.value.some(f => f.status === 'uploading'))
 const hasCompletedPendingFiles = computed(() => pendingFiles.value.some(f => f.status === 'uploaded'))
-
 // 分析任务计划：从消息流中的 write_todos 派生，实时流与历史回放同源；全部完成后隐藏
 const analysisTodos = computed(() => deriveAnalysisTodos(messages.value))
 const showAnalysisProgress = computed(() => shouldShowAnalysisProgress(analysisTodos.value))
-
 const handleUploadFile = () => {
   fileInputRef.value?.click()
 }
-
 /** 剪贴板图片可能没有扩展名（部分平台给 image/png），按 MIME 补一个名字。 */
 const normalizeClipboardFilename = (file: File): File => {
   const hasExt = /\.[a-z0-9]+$/i.test(file.name)
@@ -533,7 +548,6 @@ const normalizeClipboardFilename = (file: File): File => {
   const timestamp = Date.now()
   return new File([file], `clipboard-${timestamp}.${ext}`, { type: file.type })
 }
-
 /** 校验（格式/大小）并上传单个文件，成功后进入 pendingFiles。 */
 const uploadValidatedFile = async (file: File): Promise<boolean> => {
   const ext = '.' + (file.name.split('.').pop() || '').toLowerCase()
@@ -545,7 +559,6 @@ const uploadValidatedFile = async (file: File): Promise<boolean> => {
     ElMessage.warning('文件大小不能超过 50MB')
     return false
   }
-
   try {
     let convId = props.conversationId || localConversationId.value
     if (!convId) {
@@ -580,7 +593,6 @@ const uploadValidatedFile = async (file: File): Promise<boolean> => {
     return false
   }
 }
-
 const handleFileSelected = async (event: Event) => {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
@@ -588,24 +600,42 @@ const handleFileSelected = async (event: Event) => {
   input.value = ''
   await uploadValidatedFile(file)
 }
-
 /** 输入框粘贴截图/图片：走与手动上传相同的校验与上传链路。 */
 const handlePasteFiles = async (files: File[]) => {
   for (const raw of files) {
     await uploadValidatedFile(normalizeClipboardFilename(raw))
   }
 }
-
-const removePendingFile = (fileId: string) => {
-  pendingFiles.value = pendingFiles.value.filter(f => f.file_id !== fileId)
+const handlePreviewPendingFile = async (file: PendingFile) => {
+  if (file.status !== 'uploaded') return
+  const relativePath = `uploads/${file.storage_dir || file.filename}`
+  await workspacePanelRef.value?.openFile(relativePath)
 }
 
+const removePendingFile = async (fileId: string) => {
+  const target = pendingFiles.value.find(f => f.file_id === fileId)
+  if (!target) return
+  if (target.status === 'uploaded') {
+    try {
+      const res = await deleteUploadedFile(target.file_id)
+      if (res.status !== 'success') {
+        ElMessage.error(res.msg || '删除附件失败')
+        return
+      }
+    } catch {
+      ElMessage.error('删除附件失败')
+      return
+    }
+    // uploads 会进入工作区文件树，删除后刷新，避免列表残留已删除的文件条目
+    scheduleWorkspacePanelRefresh()
+  }
+  pendingFiles.value = pendingFiles.value.filter(f => f.file_id !== fileId)
+}
 // 超长用户输入在前端转为 .md 文件，走与手动上传一致的流程
 const convertOversizedInputToFile = async (text: string): Promise<boolean> => {
   const timestamp = formatLocalDateTime(new Date()).replace(/[/\\: ]/g, '-')
   const filename = `用户输入-${timestamp}.md`
   const file = new File([text], filename, { type: 'text/markdown' })
-
   // 立即在 pendingFiles 中显示占位卡片，让用户看到转换效果
   const placeholderId = `temp-${Date.now()}`
   const placeholder: PendingFile = {
@@ -614,7 +644,6 @@ const convertOversizedInputToFile = async (text: string): Promise<boolean> => {
     status: 'uploading',
   }
   pendingFiles.value.push(placeholder)
-
   let convId = props.conversationId || localConversationId.value
   if (!convId && props.ensureConversationId) {
     convId = await props.ensureConversationId()
@@ -629,7 +658,6 @@ const convertOversizedInputToFile = async (text: string): Promise<boolean> => {
     ElMessage.error('无法创建会话')
     return false
   }
-
   try {
     const res = await uploadFile(convId, file)
     if (res.status !== 'success') {
@@ -638,13 +666,18 @@ const convertOversizedInputToFile = async (text: string): Promise<boolean> => {
       return false
     }
     // 用真实的 file_id 替换占位 id，标记已登记（不再等待预解析）
-    placeholder.file_id = res.data.file_id
-    placeholder.filename = res.data.original_filename
-    placeholder.file_type = res.data.file_type
-    placeholder.file_size = res.data.file_size
-    placeholder.storage_dir = res.data.storage_dir
-    placeholder.status = 'uploaded'
+    const stillPending = settleUploadedPlaceholder(pendingFiles.value, placeholder, res.data)
     scheduleWorkspacePanelRefresh()
+    // 上传期间用户已移除占位 chip：补一次后端删除，避免孤儿文件。
+    if (!stillPending) {
+      try {
+        await deleteUploadedFile(res.data.file_id)
+        scheduleWorkspacePanelRefresh()
+      } catch (error) {
+        console.error('清理已移除的超长输入附件失败:', error)
+      }
+      return false
+    }
     return true
   } catch {
     pendingFiles.value = pendingFiles.value.filter(f => f.file_id !== placeholderId)
@@ -652,16 +685,13 @@ const convertOversizedInputToFile = async (text: string): Promise<boolean> => {
     return false
   }
 }
-
 // 实时检测：输入超长时自动转为文件附件
 const isProcessingOversizedInput = ref(false)
-
 const checkOversizedInput = (text: string) => {
   if (text.length <= MAX_INPUT_CHARS) return
   if (isProcessingOversizedInput.value) return
   handleOversizedInputAuto(text)
 }
-
 const handleOversizedInputAuto = async (text: string) => {
   if (isProcessingOversizedInput.value) return
   if (text.length <= MAX_INPUT_CHARS) return
@@ -676,12 +706,13 @@ const handleOversizedInputAuto = async (text: string) => {
     isProcessingOversizedInput.value = false
   }
 }
-
 type AnalysisSubmitOptions = {
   /** @ 引用文件快照（相对路径列表）；未传时按当前 chip 状态构建。 */
   fileSelections?: string[] | null
   /** 划选引用片段快照（[{text}]）；未传时按当前 chip 状态构建，随请求透传服务端。 */
   quotedSnippets?: Array<{ text: string }> | null
+  /** 文档选中内容快照；未传时按当前 chip 状态构建，随请求透传服务端。 */
+  documentAnnotations?: DocumentAnnotation[] | null
   assistantMessageId?: string
   appendUserMessage?: boolean
   fileIds?: string[]
@@ -696,19 +727,20 @@ type AnalysisSubmitOptions = {
   interruptedQuestion?: PendingUserQuestion
   autoResumeQueuedRun?: boolean
 }
-
 const resetTokenUsagePanel = (clearUsage = true) => {
   if (clearUsage) tokenUsage.value = null
   tokenUsagePanelRef.value?.closePanel()
 }
-
 // 顶层工具调用状态注册表：只存顶层调用。子智能体内层工具不进此 map——
-// 它们挂在父 task 调用的 subagentTrail 上（见 upsertSubagentTrailItem），
+// 它们挂在父 subagent 调用的 subagentTrail 上（见 upsertSubagentTrailItem），
 // 详情查找经 findToolCallById 的 trail 兜底完成。
 const toolCallsMap = ref<Map<string, ToolCallInfo>>(new Map())
 const activeToolCallId = ref<string | null>(null)
+// 点击时带过来的工具对象：内层工具只存在于任务详情 trail 里，顶层 map / 消息
+// 都查不到。没有这份兜底时，详情 tab 会按 id 解析为空而整页空白，行内高亮也会丢。
+const selectedToolCall = ref<ToolCallInfo | null>(null)
 const sidePanelOpen = ref(false)
-// 工作区文件面板整体拆到 ConversationWorkspacePanel.vue：文件列表/树/预览/上传/下载/删除
+// 右侧管理面板整体拆到 ConversationWorkspacePanel.vue：管理首页、文件列表/树/预览、子智能体任务
 // 与刷新调度都在子组件内闭环，父级只通过 ref 调用刷新与打开入口。
 const workspacePanelRef = ref<InstanceType<typeof ConversationWorkspacePanel> | null>(null)
 const presentedArtifactContents = ref<Record<string, string>>({})
@@ -721,6 +753,79 @@ const importedWorkspaceSkillIds = ref<Record<string, string>>({})
 const activeAssistantMessageId = ref<string | null>(null)
 const localConversationId = ref<string | null>(props.conversationId || null)
 const conversationIdRef = toRef(props, 'conversationId')
+// 后台任务状态源：列表/轮询恢复真值，SSE 只负责把快照合进来。
+const {
+  tasks: subagentTasks,
+  activeCount: activeSubagentCount,
+  details: subagentTaskDetails,
+  setConversation: setSubagentTasksConversation,
+  applyTaskUpdate: applySubagentTaskUpdate,
+  loadTaskDetail: loadSubagentTaskDetail,
+  cancelTask: cancelSubagentTaskRequest,
+  closeSession: closeSubagentSessionRequest,
+} = useSubagentTasks()
+const cancellingTaskIds = ref<string[]>([])
+const closingTaskIds = ref<string[]>([])
+
+// 后台任务收口后服务端可能新建隐藏通知 Run；空闲会话在这里自动接上它的 SSE，
+// 不再要求用户重新进入会话才能看到主智能体的后续工作。
+useBackgroundRunWakeup({
+  conversationId: localConversationId,
+  tasks: subagentTasks,
+  isGenerating,
+  hasActiveRun,
+  recover: recoverInterruptedPageRun,
+})
+
+watch(
+  () => localConversationId.value,
+  (nextId) => { void setSubagentTasksConversation(nextId) },
+  { immediate: true },
+)
+
+// 页面右上角开关只做展示，数量口径完全复用任务真值源；切会话时列表重置会自然归零。
+watch(activeSubagentCount, (count) => emit('subagentActiveCountChanged', count), { immediate: true })
+
+const cancelSubagentTask = async (task: SubagentTaskRecord) => {
+  if (cancellingTaskIds.value.includes(task.task_id)) return
+  cancellingTaskIds.value = [...cancellingTaskIds.value, task.task_id]
+  try {
+    const updated = await cancelSubagentTaskRequest(task.task_id)
+    if (!updated) {
+      ElMessage.error('取消任务失败，请稍后重试')
+      return
+    }
+    if (updated.status === 'cancelled') ElMessage.success('任务已取消')
+    else ElMessage.success('已请求取消，任务会在下一次心跳后停止')
+  } finally {
+    cancellingTaskIds.value = cancellingTaskIds.value.filter(id => id !== task.task_id)
+  }
+}
+
+const closeSubagentSession = async (task: SubagentTaskRecord) => {
+  if (closingTaskIds.value.includes(task.task_id)) return
+  const title = task.label?.trim() || task.description?.trim() || '该子智能体'
+  try {
+    await ElMessageBox.confirm(
+      `关闭「${title}」后将不能再追问，但历史仍可查看，并会释放当前主对话的一个子智能体额度。`,
+      '关闭子智能体',
+      { confirmButtonText: '关闭', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  closingTaskIds.value = [...closingTaskIds.value, task.task_id]
+  try {
+    const result = await closeSubagentSessionRequest(task.task_id)
+    if (!result) {
+      ElMessage.error('关闭子智能体失败，请稍后重试')
+      return
+    }
+    ElMessage.success('子智能体已关闭，额度已释放')
+  } finally {
+    closingTaskIds.value = closingTaskIds.value.filter(id => id !== task.task_id)
+  }
+}
 // 切换会话同样重置思考意图：显式选择不跨会话记忆（默认永远以注册表配置为准）
 watch(() => props.conversationId || localConversationId.value, () => {
   enableDeepThinking.value = null
@@ -728,7 +833,6 @@ watch(() => props.conversationId || localConversationId.value, () => {
 })
 const creatingDashboardToolCallId = ref<string | null>(null)
 const createdDashboardByToolId = ref<Record<string, Dashboard>>({})
-
 const selectedDatasource = computed(() => props.selectedDatasourceId || props.datasource?.id || '')
 // 产物内容缓存与会话上下文在这里绑定，模板保持单参调用（纯函数在 utils/messageArtifacts.ts）。
 const dashboardSpecContext = computed(() => ({
@@ -755,6 +859,8 @@ const {
   saveMemberDatasourceIds,
   handleSaveToDashboard,
 } = useSaveToPanel({ getFallbackChartType: () => 'table' })
+// 历史消息回放（演示模式）的接线收敛在 useConversationReplay composable（纯 view 层，不写会话状态）；
+// 实例化在 useConversationHistory 解构之后（依赖其 isLoadingHistory/hasMoreHistory/loadEarlierHistory）
 const recommendationPage = ref(0)
 const recommendationPageSize = 5
 const recommendationOffset = computed(() => recommendationPage.value * recommendationPageSize)
@@ -813,15 +919,12 @@ const {
   input,
   enabled: computed(() => true),
 })
-
 // ---- 输入框 @ 引用工作区文件（多选）----
 // @ 菜单数据源是当前会话工作区（uploads/outputs/workspace）可见文件，平铺展示（文件名 + 目录路径）；
 // 「工作区有什么就能引用什么」：新建会话工作区为空时菜单给空态说明，物化/产出后即可引用。
 // 选中信息随消息走 file_selections（相对路径列表），服务端校验白名单后并入正文短句。
 const mentionWorkspaceFiles = ref<WorkspaceFilePick[]>([])
-
 const resolveMentionConversationId = () => props.conversationId || localConversationId.value || ''
-
 const loadMentionWorkspaceFiles = async () => {
   const conversationId = resolveMentionConversationId()
   if (!conversationId) {
@@ -840,7 +943,6 @@ const loadMentionWorkspaceFiles = async () => {
     console.error('加载工作区文件列表失败:', err)
   }
 }
-
 const {
   mentionedFiles,
   displayedMentionFiles,
@@ -889,6 +991,43 @@ const {
   clearQuotedSnippets,
 } = useQuotedSnippets()
 
+// ---- 文档选中内容：Office 预览划选「引用选中内容」→ 输入框 chip；随消息透传服务端 ----
+const {
+  documentAnnotations,
+  addDocumentAnnotation,
+  removeDocumentAnnotation,
+  clearDocumentAnnotations,
+  alignDocumentAnnotationComment,
+} = useDocumentAnnotations()
+
+/** 浮层输入与下方对话输入共享草稿；任一侧编辑后 chip 要求跟随最终正文。 */
+const updateDocumentAnnotationDraft = (value: string) => {
+  input.value = value
+  alignDocumentAnnotationComment(value)
+}
+watch(input, value => alignDocumentAnnotationComment(value))
+
+/** 预览区标注回调：进 chip 列表；草稿已同步到输入框，空正文时用标注要求兜底。 */
+const handleDocumentAnnotation = (payload: {
+  filePath: string
+  docPath: string
+  quote: string
+  comment: string
+}) => {
+  const result = addDocumentAnnotation(payload)
+  if (!result.ok) {
+    const message = result.reason === 'duplicate'
+      ? '该标注已在请求列表中'
+      : (result.reason === 'limit' ? '标注已达上限（5 条），请先发送或移除' : '请填写问题或修改要求')
+    ElMessage.warning(message)
+    return
+  }
+  if (!input.value.trim()) {
+    input.value = payload.comment
+  }
+  focusInput()
+}
+
 /** 浮层「添加到对话」回调：片段进 chip 列表并聚焦输入框；超限/重复时提示。 */
 const handleAddQuoteSnippet = (text: string) => {
   if (!addQuotedSnippet(text)) {
@@ -906,7 +1045,7 @@ const findToolCallById = (id: string | null) => {
   for (const message of messages.value) {
     for (const toolCall of message.toolCalls || []) {
       if (toolCall.tool_call_id === id) return toolCall
-      // 子智能体内层工具：挂在父 task 调用的 subagentTrail 上（与
+      // 子智能体内层工具：挂在父 subagent 调用的 subagentTrail 上（与
       // ToolCallList 的 chip 构建口径一致），历史恢复后 map 中无内层条目，
       // 详情面板靠这条兜底取数。
       const inner = toolCall.subagentTrail?.find(item => item.kind === 'tool' && item.id === id)
@@ -928,7 +1067,9 @@ const findToolCallById = (id: string | null) => {
 
 const activeToolCall = computed(() => {
   const id = activeToolCallId.value
+  if (!id) return null
   return findToolCallById(id)
+    || (selectedToolCall.value?.tool_call_id === id ? selectedToolCall.value : null)
 })
 
 // 查询结果渲染口径统一在 utils/semanticTool（主对话 / 子智能体过程共用）
@@ -1069,13 +1210,15 @@ const handleCreateDashboardFromPreview = async (message: Message, tool: ToolCall
 
 const selectToolCall = (toolCall: ToolCallInfo) => {
   // 右侧面板是 tab 容器：点工具只负责打开/激活对应 tab，不再抢占其他 tab 的内容。
+  selectedToolCall.value = toolCall
   activeToolCallId.value = toolCall.tool_call_id
   sidePanelOpen.value = true
   workspacePanelRef.value?.openTool(toolCall)
 }
 
 const openConsolePanel = () => {
-  // 只负责展开：保持上次停留的 tab（关闭只卸载 aside，tab 状态还在），不强制回到「文件管理」
+  // 用户从右上角入口打开时进入管理首页；工具/文件点击仍直接打开各自 tab。
+  workspacePanelRef.value?.openHome()
   sidePanelOpen.value = true
 }
 
@@ -1151,10 +1294,6 @@ const handleDownloadPresentedArtifact = async (artifact: { path: string; name: s
   }
 }
 
-// 工作区里的文件（uploads / workspace / outputs）都可直接下载，不依赖智能体是否调用过展示工具。
-// 后端 raw 接口对三个目录一视同仁，此前的 outputs 限制只是前端产品决策，已放开。
-// SQL 查询结果与工具结果卸载缓存除外——见 utils/consoleFileTree.ts 的下载白名单说明。
-// file 由文件树每行的下载按钮传入；不传时回退到当前选中文件（兼容旧调用点）。
 const fillSemanticFieldQuestion = (payload: { fieldName: string; fieldType: 'dimension' | 'metric' }) => {
   const fieldName = String(payload?.fieldName || '').trim()
   if (!fieldName) return
@@ -1164,15 +1303,6 @@ const fillSemanticFieldQuestion = (payload: { fieldName: string; fieldType: 'dim
   input.value = currentInput ? `${currentInput}、${fieldName}` : `${prefix}${fieldName}`
   inputBarRef.value?.focus()
 }
-
-defineExpose({
-  openConsolePanel,
-  toggleConsolePanel,
-  fillSemanticFieldQuestion,
-  openSkillManager: () => {
-    isSkillManagerOpen.value = true
-  },
-})
 
 const syncHistoryToolCalls = () => {
   const nextMap = new Map<string, ToolCallInfo>()
@@ -1194,6 +1324,7 @@ const {
   hasMoreHistory,
   isLoadingEarlierHistory,
   loadEarlierHistory,
+  turnOffset,
 } = useConversationHistory({
   conversationId: conversationIdRef,
   messages,
@@ -1203,8 +1334,57 @@ const {
     activeRunStatus.value = (activeRun?.status || null) as RunActiveStatus | null
     activeRunTurnId.value = activeRun?.turn_id || null
     activeRunIsContinuation.value = Boolean(activeRun?.is_continuation)
+    // 运行中模型选择器展示当前 Run 实际使用的模型；后端已归一成注册表 ID。
+    if (activeRun?.model_id) selectedModel.value = activeRun.model_id
     activeRunResumeRunId.value = activeRun?.run_id || null
     activeRunEventId.value = activeRun?.history_checkpoint?.stream_id || '0-0'
+    activeRunStartedAtMs.value = activeRun?.stream_started_wall_ms ?? null
+  },
+})
+
+// 回放（演示模式）宿主接线：入口门禁/全量预拉/pending 自动开演/柔性滚动跟随，收敛在 composable
+const {
+  replayGroup,
+  replayPlayer,
+  replayRevealedMessages,
+  replayArmed,
+  replaySeedText,
+  replayPreparing,
+  requestReplay,
+  startReplay,
+  exitReplay,
+  restartReplay,
+  cycleReplaySpeed,
+} = useConversationReplay({
+  messages,
+  chatContainerRef,
+  isNearBottom,
+  isGenerating,
+  hasActiveRun,
+  isLoadingHistory,
+  hasMoreHistory,
+  conversationId: conversationIdRef,
+  loadEarlierHistory,
+})
+
+// armed 态预填：把第一条提问放进输入框并聚焦，用户回车启动（起点与真实发送一致）；
+// 退出 armed（回车启动或 Esc 取消）时清掉预填内容
+watch(replayArmed, (armed, prev) => {
+  if (armed) {
+    input.value = replaySeedText.value
+    inputBarRef.value?.focus()
+  } else if (prev) {
+    input.value = ''
+  }
+})
+
+defineExpose({
+  openConsolePanel,
+  toggleConsolePanel,
+  fillSemanticFieldQuestion,
+  requestReplay,
+  openSkillManager: () => {
+    isSkillManagerOpen.value = true
   },
 })
 
@@ -1223,9 +1403,7 @@ watch(
     if (editingSteerId.value && retiredSet.has(editingSteerId.value)) cancelEditSteer()
   },
 )
-
 // 距底部阈值内视为「贴底」：与右侧子智能体过程共用 utils/scrollFollow 的同一口径
-
 
 // 滚到顶自动续页：只在「从阈值之外向上越过阈值」时放行一次（见 utils/scrollReach）
 const topReach = createTopReachTracker()
@@ -1376,10 +1554,11 @@ const startSkillCreation = async () => {
   inputBarRef.value?.focus()
 }
 
-// 当前选中模型不在注册表中时回填默认模型（如配置变更后）
-watch(modelOptions, (models) => {
+// 空选择 = 新会话；无效选择 = 注册表变更后的残留。两者都回填默认模型；
+// 历史会话回填的真实模型已在列表中，不会被覆盖。
+watch([modelOptions, selectedModel], ([models, currentModel]) => {
   const defaultModel = models.find(item => item.is_default)?.id || models[0]?.id || ''
-  if (defaultModel && !models.some(item => item.id === selectedModel.value)) {
+  if (defaultModel && (!currentModel || !models.some(item => item.id === currentModel))) {
     selectedModel.value = defaultModel
   }
 }, { immediate: true })
@@ -1434,6 +1613,7 @@ watch(
       loadedPresentedArtifactKeys.value = new Set()
       loadingPresentedArtifactKeys.value = new Set()
       activeToolCallId.value = null
+      selectedToolCall.value = null
       sidePanelOpen.value = false
           activeAssistantMessageId.value = null
       resetTokenUsagePanel()
@@ -1518,11 +1698,26 @@ const attachGenerationStats = (messageId: string, rawStats: unknown) => {
 // 执行耗时是前端本地 ticker：从本轮发起起算的墙钟实时递增，message_end 收口后由
 // generation_stats.totalDurationMs（服务端总墙钟，随消息持久化）接管，二者是两个来源。
 const liveGenerationSpeed = ref<number | null>(null)
+const liveSupersteps = ref<number | null>(null)
+const liveSuperstepLimit = ref<number | null>(null)
 const liveElapsedMs = ref<number | null>(null)
 let elapsedTickerId: ReturnType<typeof setInterval> | null = null
 
+// 失败轮次没有 message_end 收口：把实时步数落到当前助手气泡，再由 stopLive 清理实时值。
+const attachLiveSuperstepsOnFailure = () => {
+  if (!liveSupersteps.value) return
+  const message = ensureAssistantMessage()
+  message.generationStats = {
+    ...(message.generationStats || {}),
+    supersteps: liveSupersteps.value,
+    ...(liveSuperstepLimit.value ? { recursionLimit: liveSuperstepLimit.value } : {}),
+  }
+}
+
 const stopLiveGenerationSpeed = () => {
   liveGenerationSpeed.value = null
+  liveSupersteps.value = null
+  liveSuperstepLimit.value = null
   if (elapsedTickerId !== null) {
     clearInterval(elapsedTickerId)
     elapsedTickerId = null
@@ -1629,7 +1824,7 @@ const upsertSubagentTrailItem = (event: ToolLifecycleEventData) => {
   const parentId = event.parent_tool_call_id
   if (!parentId) return
 
-  // 提交挂到父 task 调用下的 trail 变更：写 map 与消息引用（内层工具不进
+  // 提交挂到父 subagent 调用下的 trail 变更：写 map 与消息引用（内层工具不进
   // 全局 map，详情查找走 findToolCallById 的 trail 兜底）
   const commitTrail = (transform: (trail: SubagentTrailItem[]) => SubagentTrailItem[]) => {
     const mergeParent = (tool: ToolCallInfo): ToolCallInfo => (
@@ -1638,7 +1833,7 @@ const upsertSubagentTrailItem = (event: ToolLifecycleEventData) => {
     const parentFromMap = toolCallsMap.value.get(parentId)
     const merged = mergeParent(parentFromMap || {
       tool_call_id: parentId,
-      tool_name: 'task',
+      tool_name: 'subagent',
       args: {},
       status: 'running',
     })
@@ -1649,11 +1844,11 @@ const upsertSubagentTrailItem = (event: ToolLifecycleEventData) => {
     }
   }
 
-  /** 只更新父 task 调用上的字段（不碰 trail），同一事件流内收敛到最新值。 */
+  /** 只更新父 subagent 调用上的字段（不碰 trail），同一事件流内收敛到最新值。 */
   const applySubagentToolPatch = (parentId: string, patch: (tool: ToolCallInfo) => ToolCallInfo | null) => {
     const base = toolCallsMap.value.get(parentId) || {
       tool_call_id: parentId,
-      tool_name: 'task',
+      tool_name: 'subagent',
       args: {},
       status: 'running',
     }
@@ -1666,7 +1861,7 @@ const upsertSubagentTrailItem = (event: ToolLifecycleEventData) => {
     }
   }
 
-  // 子智能体上下文用量：只更新父 task 调用上的快照字段（标题行徽标）
+  // 子智能体上下文用量：只更新父 subagent 调用上的快照字段（标题行徽标）
   const upsertSubagentContextUsage = (event: ToolLifecycleEventData) => {
     const parentId = event.parent_tool_call_id
     if (!parentId || typeof event.used_tokens !== 'number') return
@@ -1685,11 +1880,16 @@ const upsertSubagentTrailItem = (event: ToolLifecycleEventData) => {
     }))
   }
 
-  // 子图压缩记录：按 id 去重追加到父 task 调用（过程面板展示「已压缩 N 次」）
+  // 子图压缩记录：压缩中占位实时替换，完成态按 id 去重追加到父 subagent 调用
   const upsertSubagentCompaction = (event: ToolLifecycleEventData) => {
     const parentId = event.parent_tool_call_id
+    if (!parentId) return
+    if (event.phase === 'started') {
+      applySubagentToolPatch(parentId, tool => applySubagentCompactionStartedToTool(tool, event))
+      return
+    }
     const record = buildSubagentCompactionRecord(event)
-    if (!parentId || !record) return
+    if (!record) return
     applySubagentToolPatch(parentId, tool => applySubagentCompactionToTool(tool, record))
   }
 
@@ -1703,83 +1903,29 @@ const upsertSubagentTrailItem = (event: ToolLifecycleEventData) => {
     return
   }
 
-  // 流式增量：按 message_id 追加正文/思考
-  if (event.type === 'subagent_message_delta' || event.type === 'subagent_thinking_delta') {
-    const entryId = event.message_id
-    const delta = event.delta || ''
-    if (!entryId || !delta) return
-    const isText = event.type === 'subagent_message_delta'
-    commitTrail((trail) => {
-      const idx = trail.findIndex(item => item.id === entryId && item.kind === 'message')
-      if (idx >= 0) {
-        const prev = trail[idx]
-        if (!prev) return trail
-        trail[idx] = isText
-          ? { ...prev, content: (prev.content || '') + delta, truncated: Boolean(event.truncated) || Boolean(prev.truncated) }
-          : { ...prev, thinking: (prev.thinking || '') + delta, thinkingTruncated: Boolean(event.truncated) || Boolean(prev.thinkingTruncated) }
-      } else {
-        trail.push(isText
-          ? { kind: 'message', id: entryId, content: delta, truncated: Boolean(event.truncated) }
-          : { kind: 'message', id: entryId, thinking: delta, thinkingTruncated: Boolean(event.truncated) })
-      }
-      return trail
-    })
-    return
-  }
-
-  if (event.type === 'subagent_message') {
-    const entryId = event.message_id
-    if (!entryId) return
-    const content = event.content || ''
-    commitTrail((trail) => {
-      const idx = trail.findIndex(item => item.id === entryId && item.kind === 'message')
-      if (idx >= 0) {
-        const prev = trail[idx]
-        if (!prev) return trail
-        // 收敛策略「只补标记不覆盖」：已增量流过的消息保留前端拼出的全文，
-        // 完整事件只补截断标记；未流过（如后端降级路径）才写入完整内容
-        trail[idx] = event.streamed
-          ? { ...prev, truncated: Boolean(event.truncated) || Boolean(prev.truncated) }
-          : { ...prev, content: content || prev.content || '', truncated: Boolean(event.truncated) }
-      } else {
-        trail.push({ kind: 'message', id: entryId, content, truncated: Boolean(event.truncated) })
-      }
-      return trail
-    })
-    return
-  }
-
-  // 工具生命周期事件：tool_started / tool_completed / tool_failed
-  const entryId = event.tool_call_id
-  if (!entryId) return
-  const entry: SubagentTrailItem = {
-    kind: 'tool',
-    id: entryId,
-    tool_name: event.tool_name || 'tool_call',
-    args: { ...(event.args || {}) },
-    result: event.content || event.result,
-    status: event.type === 'tool_failed' ? 'error' : event.type === 'tool_completed' ? 'completed' : 'running',
-    started_at_ms: event.started_at_ms ?? null,
-    ended_at_ms: event.ended_at_ms ?? null,
-  }
-  commitTrail((trail) => {
-    const idx = trail.findIndex(item => item.id === entryId)
-    if (idx >= 0) {
-      const prev = trail[idx]
-      if (!prev) return trail
-      trail[idx] = {
-        ...prev,
-        ...entry,
-        args: { ...(prev.args || {}), ...(entry.args || {}) },
-        // tool_started 事件不带计时，完成事件才补齐：缺省时保留已有值
-        started_at_ms: entry.started_at_ms ?? prev.started_at_ms ?? null,
-        ended_at_ms: entry.ended_at_ms ?? prev.ended_at_ms ?? null,
-      }
-    } else {
-      trail.push(entry)
+  if (event.type === 'subagent_generation_speed') {
+    const speed = Number(event.tokens_per_second)
+    if (Number.isFinite(speed) && speed > 0) {
+      applySubagentToolPatch(parentId, tool => ({ ...tool, subagentLiveSpeed: speed }))
     }
-    return trail
-  })
+    return
+  }
+
+  if (event.type === 'subagent_steps') {
+    const steps = Number(event.supersteps)
+    if (Number.isFinite(steps) && steps > 0) {
+      const limit = Number(event.recursion_limit)
+      applySubagentToolPatch(parentId, tool => ({
+        ...tool,
+        subagentLiveSteps: Math.floor(steps),
+        ...(Number.isFinite(limit) && limit > 0 ? { subagentRecursionLimit: Math.floor(limit) } : {}),
+      }))
+    }
+    return
+  }
+
+  // 流式增量 / 完整消息 / 工具生命周期统一由共享 reducer 归并。
+  commitTrail(trail => applySubagentTrailEvent(trail, event))
 
   // 子智能体内部工具落盘（如 OfficeCLI 写 docx）后同步刷新控制台文件树，
   // 与主智能体工具完成后的刷新行为保持一致；schedule 内部有 500ms 防抖
@@ -1798,6 +1944,7 @@ const finalizeUnfinishedToolCalls = (status: 'completed' | 'error', result?: str
       ...tool,
       status,
       result: result || tool.result,
+      argsStreaming: false,
     }))
   }
   toolCallsMap.value = nextMap
@@ -1810,6 +1957,7 @@ const finalizeUnfinishedToolCalls = (status: 'completed' | 'error', result?: str
         ...tool,
         status,
         result: result || tool.result,
+        argsStreaming: false,
       })
     })
   }
@@ -1890,17 +2038,8 @@ const handleLangGraphMessage = (msg: LangGraphMessage) => {
     for (const tc of msg.tool_calls) {
       if (!tc.id || !tc.name) continue
       const existing = toolCallsMap.value.get(tc.id)
-      const toolInfo: ToolCallInfo = {
-        tool_call_id: tc.id,
-        tool_name: tc.name,
-        display_name: tc.display_name || existing?.display_name,
-        args: { ...(existing?.args || {}), ...(tc.args || {}) },
-        result: existing?.result,
-        status: existing?.status || 'generating',
-        started_at_ms: existing?.started_at_ms ?? null,
-        ended_at_ms: existing?.ended_at_ms ?? null,
-      }
-      upsertToolMessage(toolInfo)
+      // 收口消息只补身份与参数，必须保留 tool_progress 已归并的 +N/-M、intent 等展示字段。
+      upsertToolMessage(mergeToolCallFromMessage(existing, tc))
     }
   }
 
@@ -1944,6 +2083,9 @@ const submitAnalysisQuery = async (
   const quotedSnippetsSnapshot = options.quotedSnippets !== undefined
     ? (options.quotedSnippets || [])
     : quotedSnippets.value.map(item => ({ text: item.text }))
+  const documentAnnotationsSnapshot = options.documentAnnotations !== undefined
+    ? (options.documentAnnotations || [])
+    : documentAnnotations.value
   const userMessage: Message = {
     id: options.userMessageId || `user-${Date.now()}`,
     role: 'user',
@@ -1962,6 +2104,9 @@ const submitAnalysisQuery = async (
       id: `quote-${index}`,
       text: item.text,
     }))
+  }
+  if (documentAnnotationsSnapshot.length > 0) {
+    userMessage.documentAnnotations = documentAnnotationsSnapshot
   }
   if (options.appendUserMessage !== false) {
     messages.value.push(userMessage)
@@ -1988,10 +2133,12 @@ const submitAnalysisQuery = async (
     clearSelectedSkills()
     clearMentionFiles()
     clearQuotedSnippets()
+    clearDocumentAnnotations()
   }
   isGenerating.value = true
   startLiveElapsedTicker(options.elapsedSeedMs)
   activeToolCallId.value = null
+  selectedToolCall.value = null
   let startedRunId: string | null = null
   let completedNextRunId: string | null = null
   let completedRunStatus: RunDoneStatus | null = null
@@ -2036,6 +2183,7 @@ const submitAnalysisQuery = async (
       {
         mode: 'query',
         onMessage: (msg) => handleLangGraphMessage(msg),
+        onSubagentTaskUpdated: (task) => applySubagentTaskUpdate(task),
         onResult: () => {},
         onStatus: () => {},
         onError: (error, meta) => {
@@ -2067,7 +2215,12 @@ const submitAnalysisQuery = async (
             return
           }
           finalizeUnfinishedToolCalls('error', error)
+          attachLiveSuperstepsOnFailure()
           setActiveAssistantError(error)
+          if (startedRunId) {
+            startSseReconnect()
+            signalSseDisconnect()
+          }
         },
         onRunningTool: (toolInfo) => {
           if (!toolInfo.tool_call_id) return
@@ -2099,8 +2252,13 @@ const submitAnalysisQuery = async (
         onGenerationSpeed: (tokensPerSecond) => {
           liveGenerationSpeed.value = tokensPerSecond
         },
+        onRunSteps: (supersteps, recursionLimit) => {
+          liveSupersteps.value = supersteps
+          if (recursionLimit) liveSuperstepLimit.value = recursionLimit
+        },
         fileSelections: mentionFileSelections,
         quotedSnippets: quotedSnippetsSnapshot,
+        documentAnnotations: toDocumentAnnotationRequests(documentAnnotationsSnapshot),
         enableThinking: enableDeepThinking.value,
         thinkingEffort: thinkingEffort.value,
         onContextCompression: (event) => appendContextCompressionEvent(event),
@@ -2108,7 +2266,7 @@ const submitAnalysisQuery = async (
         queuedMessageId: options.queuedMessageId,
         preserveQueuedMessages: options.preserveQueuedMessages,
         onToolLifecycle: (event) => {
-          // 子智能体内部过程事件：挂到所属 task 调用下，不建顶层片段
+          // 子智能体内部过程事件：挂到所属 subagent 调用下，不建顶层片段
           // 必须在 tool_call_id 判空之前分流——文本条目本身没有 tool_call_id
           if (event.parent_tool_call_id) {
             upsertSubagentTrailItem(event)
@@ -2116,22 +2274,75 @@ const submitAnalysisQuery = async (
           }
           if (!event.tool_call_id) return
           const existing = toolCallsMap.value.get(event.tool_call_id)
+          // 参数生成中：只累积预览文本，不解析半截 JSON；完整参数仍由 tool_started /
+          // replace_args 快照下发后再走结构化展示。
+          if (event.type === 'tool_args_delta') {
+            const isTerminal = existing?.status === 'completed' || existing?.status === 'error'
+            if (isTerminal) return
+            if (event.done) {
+              if (!existing) return
+              upsertToolMessage({
+                ...existing,
+                argsStreaming: false,
+                argsText: undefined,
+                argsTruncated: undefined,
+                status: 'running',
+              })
+              return
+            }
+            upsertToolMessage({
+              ...(existing || {}),
+              tool_call_id: event.tool_call_id,
+              tool_name: event.tool_name || existing?.tool_name || 'tool_call',
+              display_name: event.display_name || existing?.display_name,
+              args: existing?.args || {},
+              status: 'generating',
+              argsText: `${existing?.argsText || ''}${event.delta || ''}`,
+              argsStreaming: true,
+              argsTruncated: Boolean(event.truncated) || Boolean(existing?.argsTruncated),
+            })
+            return
+          }
           const isFailed = event.type === 'tool_failed'
           const isCompleted = event.type === 'tool_completed'
+          // tool_progress/tool_started 也可能只用于补发完整参数（values 快照里的最终
+          // AIMessage 参数）。已进入终态的工具只合并参数，不能把状态倒回 running。
+          const keepTerminalStatus = (existing?.status === 'completed' || existing?.status === 'error')
+            && (event.type === 'tool_progress' || event.type === 'tool_started')
+          // 参数生成期间的非收口 tool_progress（intent/行数）不能把 generating 倒回 running
+          const keepGenerating = existing?.status === 'generating'
+            && event.type === 'tool_progress'
+            && !event.replace_args
+          const activeStatus = keepTerminalStatus
+            ? existing?.status || 'running'
+            : keepGenerating
+              ? 'generating'
+              : 'running'
+          // replace_args = 参数生成结束的完整快照：从预览切回结构化参数
+          const argsStreaming = event.type === 'tool_progress' && !event.replace_args
+            ? existing?.argsStreaming
+            : false
           const toolInfo: ToolCallInfo = {
             tool_call_id: event.tool_call_id,
             tool_name: event.tool_name || existing?.tool_name || 'tool_call',
             display_name: event.display_name || existing?.display_name,
-            args: { ...(existing?.args || {}), ...(event.args || {}) },
+            args: event.replace_args && event.args
+              ? { ...event.args }
+              : { ...(existing?.args || {}), ...(event.args || {}) },
             result: event.content || event.result || existing?.result,
             progressMessage: event.message || existing?.progressMessage,
             progress: typeof event.progress === 'number' ? event.progress : existing?.progress,
             contentLines: typeof event.content_lines === 'number' ? event.content_lines : existing?.contentLines,
             removedLines: typeof event.removed_lines === 'number' ? event.removed_lines : existing?.removedLines,
             streamingIntent: typeof event.intent === 'string' && event.intent ? event.intent : existing?.streamingIntent,
-            status: isFailed ? 'error' : isCompleted ? 'completed' : 'running',
+            status: isFailed ? 'error' : isCompleted ? 'completed' : activeStatus,
+            argsText: event.replace_args ? undefined : existing?.argsText,
+            argsStreaming,
+            argsTruncated: event.replace_args ? undefined : existing?.argsTruncated,
             subagentTrail: existing?.subagentTrail,
             subagentTokenUsage: event.subagent_token_usage || existing?.subagentTokenUsage, subagentContextUsage: existing?.subagentContextUsage, subagentCompactions: existing?.subagentCompactions, subagentTokenUsageDetail: existing?.subagentTokenUsageDetail,
+            subagentSupersteps: event.subagent_supersteps ?? existing?.subagentSupersteps,
+            subagentRecursionLimit: event.subagent_recursion_limit ?? existing?.subagentRecursionLimit,
             started_at_ms: event.started_at_ms ?? existing?.started_at_ms ?? null,
             ended_at_ms: event.ended_at_ms ?? existing?.ended_at_ms ?? null,
           }
@@ -2150,6 +2361,11 @@ const submitAnalysisQuery = async (
             : null
           if (active?.role === 'assistant') active.isStreaming = false
         },
+        onConversationTitleUpdated: (payload) => {
+          const title = String(payload.title || '').trim()
+          const conversationId = String(payload.conversation_id || resolvedConversationId).trim()
+          if (title && conversationId) emit('conversationTitleChanged', conversationId, title)
+        },
         onRunStarted: (runId) => {
           startedRunId = runId
           hasActiveRun.value = true
@@ -2159,17 +2375,17 @@ const submitAnalysisQuery = async (
           }
           activeRunId.value = runId
           saveOwnedRun(resolvedConversationId, runId)
+          startSseReconnect()
           emit('runStatusChanged', resolvedConversationId, 'active')
         },
         responseFactory: options.responseFactory,
         onRunEvent: (eventId) => {
-          // 事件游标只由服务端数据库 checkpoint 提供，避免浏览器内存状态
-          // 在断线恢复时跳过尚未随历史一起读取的事件。
-          void eventId
+          if (eventId) activeRunEventId.value = eventId
         },
         onFirstEvent: () => {
           if (isFirstMessage) emit('firstMessageStarted', resolvedConversationId)
         },
+        onStreamActivity: markSseActivity,
         onRunCompleted: (info) => {
           completedRunStatus = info.status
           completedNextRunId = info.nextRunId || null
@@ -2184,6 +2400,7 @@ const submitAnalysisQuery = async (
     )
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : '发送失败'
+    attachLiveSuperstepsOnFailure()
     setActiveAssistantError(errorMessage)
   } finally {
     isGenerating.value = false
@@ -2251,6 +2468,16 @@ const resumePendingQuestion = async (answers?: UserQuestionAnswer[], cancelled =
 
 // options.queuedMessageId：单条队列消息"执行"入口透传的消息 ID（普通输入框发送不传）
 const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
+  // 回放待启动（armed）：预填内容回车 = 启动回放，不真实发送；
+  // 回放播放中：禁止发送（纯 view 层演示，不干扰会话状态），grouping 合并连按回车的重复提示
+  if (replayArmed.value) {
+    startReplay()
+    return
+  }
+  if (replayGroup.value) {
+    ElMessage.info({ message: '回放演示中，不能发送消息', grouping: true })
+    return
+  }
   if (isStoppingRun.value) return
   if (activeRunStatus.value === 'cancelling') {
     ElMessage.info('当前任务正在停止，请稍后再发送')
@@ -2378,7 +2605,7 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
   const hasUploadedFiles = pendingFiles.value.some(
     f => f.status === 'uploaded' && f.file_id && !f.file_id.startsWith('temp-'),
   )
-  if (!input.value.trim() && !hasUploadedFiles && quotedSnippets.value.length === 0) return
+  if (!input.value.trim() && !hasUploadedFiles && quotedSnippets.value.length === 0 && documentAnnotations.value.length === 0) return
   if (!selectedDatasource.value) {
     ElMessage.warning('请先选择数据源')
     return
@@ -2441,6 +2668,12 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
   if (!effectiveQueryText.trim() && quotedSnippetsSnapshot.length > 0) {
     effectiveQueryText = '请结合引用的内容继续分析'
   }
+  // 只有文档选中内容时不能再要求用户重复输入问题：标注里的问题/要求就是正文。
+  if (!effectiveQueryText.trim() && documentAnnotations.value.length > 0) {
+    effectiveQueryText = documentAnnotations.value[0]?.comment || '请结合选中的内容回答'
+  }
+  alignDocumentAnnotationComment(effectiveQueryText)
+  const documentAnnotationsSnapshot = [...documentAnnotations.value]
 
   const requestText = buildSkillRequestText(effectiveQueryText, skillNames)
   // 附件已捕获进 completedFileIds/attachments，发送瞬间即清空输入框附件卡片，
@@ -2452,6 +2685,7 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
     restoreInputText: queryText,
     fileSelections: mentionFileSelectionsSnapshot,
     quotedSnippets: quotedSnippetsSnapshot.length > 0 ? quotedSnippetsSnapshot : [],
+    documentAnnotations: documentAnnotationsSnapshot.length > 0 ? documentAnnotationsSnapshot : [],
     fileIds: completedFileIds.length > 0 ? completedFileIds : undefined,
     preserveQueuedMessages: pendingSteerMessages.value.length > 0,
     attachments: attachments.length > 0 ? attachments : undefined,
@@ -2459,6 +2693,12 @@ const handleSubmit = async (options: { queuedMessageId?: string } = {}) => {
 }
 
 const handleStop = async () => {
+  // 回放中停止键与真实运行同形（蓝色停止按钮）：点击映射为暂停/继续回放，
+  // 不触达真实 Run（此时本就没有活动 Run）
+  if (replayGroup.value) {
+    replayPlayer.toggle()
+    return
+  }
   if (isStoppingRun.value) return
   const conversationId = localConversationId.value || props.conversationId
   const runId = activeRunId.value
@@ -2539,15 +2779,61 @@ const handleKeyDown = (event: KeyboardEvent) => {
 <template>
   <div class="relative h-full flex min-h-0 bg-[#F7F8FA]">
     <div class="relative flex-1 min-w-0 flex flex-col">
+      <!-- 回放浮标：常驻仅一个低调小图标，悬停展开控制（状态/暂停/倍速/重播/退出）；Esc 也可退出回放 -->
+      <div
+        v-if="replayGroup"
+        class="group absolute right-4 top-3 z-30 flex items-center gap-1 rounded-full bg-slate-900/40 py-1 pl-2 pr-2 text-white shadow-sm backdrop-blur-sm"
+        title="回放控制"
+      >
+        <i class="fa-solid fa-clapperboard text-[10px] text-white/50" />
+        <div class="flex items-center gap-1 overflow-hidden max-w-0 opacity-0 transition-all duration-200 group-hover:max-w-[220px] group-hover:opacity-100">
+          <span
+            class="inline-block h-1.5 w-1.5 rounded-full"
+            :class="replayPlayer.status.value === 'playing' ? 'animate-pulse bg-emerald-400' : 'bg-slate-300'"
+          />
+          <button
+            type="button"
+            class="inline-flex h-5 w-5 items-center justify-center rounded-full text-white/80 transition-colors hover:bg-white/15 hover:text-white"
+            :title="replayPlayer.status.value === 'paused' ? '继续回放' : '暂停回放'"
+            @click="replayPlayer.toggle()"
+          >
+            <i :class="replayPlayer.status.value === 'paused' ? 'fa-solid fa-play' : 'fa-solid fa-pause'" class="text-[9px]" />
+          </button>
+          <button
+            type="button"
+            class="inline-flex h-5 min-w-[28px] items-center justify-center rounded-full text-[10px] font-medium tabular-nums text-white/80 transition-colors hover:bg-white/15 hover:text-white"
+            :title="`回放倍速 ${replayPlayer.speed.value}x，点击切换`"
+            @click="cycleReplaySpeed"
+          >
+            {{ replayPlayer.speed.value }}x
+          </button>
+          <button
+            type="button"
+            class="inline-flex h-5 w-5 items-center justify-center rounded-full text-white/80 transition-colors hover:bg-white/15 hover:text-white"
+            title="从头重播"
+            @click="restartReplay"
+          >
+            <i class="fa-solid fa-rotate-right text-[9px]" />
+          </button>
+          <button
+            type="button"
+            class="inline-flex h-5 w-5 items-center justify-center rounded-full text-white/80 transition-colors hover:bg-white/15 hover:text-white"
+            title="退出回放（Esc）"
+            @click="exitReplay"
+          >
+            <i class="fa-solid fa-xmark text-[9px]" />
+          </button>
+        </div>
+      </div>
       <div
         ref="chatContainerRef"
         :class="[
           'flex-1 overflow-y-auto p-4',
-          !hasLocalConversationStarted && messages.length === 0 && 'flex flex-col'
+          (replayArmed || replayPreparing || (!hasLocalConversationStarted && messages.length === 0)) && 'flex flex-col'
         ]"
         @scroll="handleScroll"
       >
-        <div v-if="hasMoreHistory && !isLoadingHistory" class="mb-3 flex justify-center">
+        <div v-if="hasMoreHistory && !isLoadingHistory && !replayArmed && !replayPreparing" class="mb-3 flex justify-center">
           <!-- 滚到顶会自动翻页，这里主要负责反馈加载中状态；
                自动翻页被跳过的场景（运行中、内容不足以滚动）仍可点按钮手动加载 -->
           <div
@@ -2571,7 +2857,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
           <i class="fa-solid fa-spinner fa-spin mr-2 text-xs"></i>
           <span>加载历史消息...</span>
         </div>
-        <div v-else-if="!hasLocalConversationStarted && messages.length === 0" class="flex-1 flex items-center justify-center">
+        <div v-else-if="replayArmed || replayPreparing || (!hasLocalConversationStarted && messages.length === 0)" class="flex-1 flex items-center justify-center">
           <div class="w-[774px] max-w-[90%] flex flex-col items-center pb-4">
             <div class="flex flex-col items-center text-center">
               <div class="bg-gradient-to-r from-blue-600 to-indigo-500 bg-clip-text text-[32px] font-bold leading-tight text-transparent">嗨，我是 DataBuddy</div>
@@ -2608,9 +2894,11 @@ const handleKeyDown = (event: KeyboardEvent) => {
           </div>
         </div>
 
+        <!-- 回放 run-active 恒 active 直到 finished：若用 === 'playing'，暂停瞬间 run-active 跳 false，
+             播放中消息 is-current-run 变 false 导致工作过程区自动折叠（暂停正是想细看过程） -->
         <ConversationMessageList
           v-else
-          :messages="messages"
+          :messages="replayGroup ? replayRevealedMessages : messages"
           :datasource-id="selectedDatasource"
           :execution-targets="props.executionTargets"
           :active-tool-call-id="activeToolCallId"
@@ -2618,8 +2906,10 @@ const handleKeyDown = (event: KeyboardEvent) => {
           :on-save="handleSaveToDashboard"
           :resolve-tool-call="getRenderableMessageToolCall"
           :should-inline-render-result="shouldInlineRenderToolCall"
-          :run-active="isGenerating || hasActiveRun"
+          :run-active="replayGroup ? replayPlayer.status.value !== 'finished' : (isGenerating || hasActiveRun)"
           :live-generation-speed="liveGenerationSpeed"
+          :live-supersteps="liveSupersteps"
+          :live-superstep-limit="liveSuperstepLimit"
           :live-elapsed-ms="liveElapsedMs"
           @select-tool="selectToolCall"
           @open-attachment="handleOpenAttachment"
@@ -2761,10 +3051,10 @@ const handleKeyDown = (event: KeyboardEvent) => {
 
       <div v-show="!isLoadingHistory || messages.length > 0" class="p-4 bg-gray-50 border-t border-slate-100">
         <div class="max-w-[774px] mx-auto w-[90%]">
-          <AnalysisProgress
-            v-if="showAnalysisProgress"
+          <ConversationReconnectBanner
+            v-if="reconnectState.phase !== 'idle'"
             class="mb-3"
-            :todos="analysisTodos"
+            :state="reconnectState"
           />
           <div
             v-if="pendingSteerMessages.length"
@@ -2874,27 +3164,18 @@ const handleKeyDown = (event: KeyboardEvent) => {
             @submit="resumePendingQuestion($event)"
             @cancel="resumePendingQuestion(undefined, true)"
           />
-          <div v-if="!pendingUserQuestion && pendingFiles.length" class="mb-1.5 flex max-h-[100px] flex-wrap gap-1.5 overflow-y-auto">
-            <div
-              v-for="f in pendingFiles"
-              :key="f.file_id"
-              class="group flex items-center gap-1.5 rounded-full border border-[#1677FF]/30 bg-white px-2.5 py-1 text-[11px] text-[#1F3A56] shadow-sm transition-colors hover:border-[#1677FF]/50"
-            >
-              <i class="fa-solid fa-spinner fa-spin text-[9px] text-amber-500" v-if="f.status === 'uploading'"></i>
-              <i class="fa-regular fa-file-lines text-[11px] text-[#1677FF]" v-else></i>
-              <span class="max-w-[160px] truncate">{{ f.filename }}</span>
-              <span v-if="f.status === 'uploading'" class="text-amber-500">上传中</span>
-              <span v-else-if="f.status === 'failed'" class="text-red-400">失败</span>
-              <button
-                type="button"
-                class="ml-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full text-gray-300 transition-colors hover:bg-red-50 hover:text-red-500"
-                @click="removePendingFile(f.file_id)"
-                title="移除"
-              >
-                <i class="fa-solid fa-xmark text-[8px]"></i>
-              </button>
-            </div>
-          </div>
+          <div
+            class="transition-colors"
+            :class="showAnalysisProgress ? [
+              'mb-3 overflow-hidden rounded-2xl border bg-white shadow-[0_2px_12px_rgba(0,0,0,0.06),0_0_0_1px_rgba(0,0,0,0.02)]',
+              inputFocused ? 'border-blue-400/40 ring-2 ring-[#1677FF]/10' : 'border-black/[0.08]',
+            ] : ''"
+          >
+            <AnalysisProgress
+              v-if="showAnalysisProgress"
+              embedded
+              :todos="analysisTodos"
+            />
           <ConversationInputBar
             v-if="!pendingUserQuestion"
             ref="inputBarRef"
@@ -2902,21 +3183,26 @@ const handleKeyDown = (event: KeyboardEvent) => {
             v-model:selected-model="selectedModel"
             v-model:enable-deep-thinking="enableDeepThinking"
             v-model:thinking-effort="thinkingEffort"
-            :placeholder="hasLocalConversationStarted || messages.length > 0 ? '继续输入任务，输入 / 可选择技能，@ 可引用工作区文件' : '请输入任务，输入 / 可选择技能，@ 可引用工作区文件'"
+            :placeholder="replayArmed ? '请输入任务，输入 / 可选择技能，@ 可引用工作区文件' : (hasLocalConversationStarted || messages.length > 0 ? '继续输入任务，输入 / 可选择技能，@ 可引用工作区文件' : '请输入任务，输入 / 可选择技能，@ 可引用工作区文件')"
             :selected-skills="selectedSkills"
             :selected-mention-files="mentionedFiles"
             :quoted-snippets="quotedSnippets"
+            :document-annotations="documentAnnotations"
+            :has-pending-files="pendingFiles.length > 0"
             :model-options="modelOptions"
-            :is-generating="runBusy"
+            :is-generating="replayGroup ? replayPlayer.status.value === 'playing' : runBusy"
             :is-stopping="isStoppingRun"
-            :can-submit="runBusy ? Boolean(input.trim() && !isSteering) : Boolean((input.trim() || hasCompletedPendingFiles || quotedSnippets.length > 0) && selectedDatasource)"
+            :can-submit="replayArmed ? true : (replayGroup ? false : (runBusy ? Boolean(input.trim() && !isSteering) : Boolean((input.trim() || hasCompletedPendingFiles || quotedSnippets.length > 0 || documentAnnotations.length > 0) && selectedDatasource)))"
             :input-focused="inputFocused"
-            :submit-title="!selectedDatasource ? '请先选择数据源' : '发送 (Enter)'"
+            :attached="showAnalysisProgress"
+            :submit-title="replayArmed ? '回车开始回放' : (!selectedDatasource ? '请先选择数据源' : '发送 (Enter)')"
             @submit="handleSubmit"
             @stop="handleStop"
+            @model-picked="emit('modelPicked', $event)"
             @clear-skill="clearSelectedSkill"
             @clear-mention-file="handleMentionFileClear"
             @remove-quote-snippet="removeQuotedSnippet"
+            @remove-document-annotation="removeDocumentAnnotation"
             @upload-file="handleUploadFile"
             @paste-files="handlePasteFiles"
             @open-skill-manager="isSkillManagerOpen = true"
@@ -2924,6 +3210,32 @@ const handleKeyDown = (event: KeyboardEvent) => {
             @focus="inputFocused = true"
             @blur="inputFocused = false"
           >
+            <template #prepend-extra>
+              <div
+                v-for="f in pendingFiles"
+                :key="f.file_id"
+                class="group flex w-fit cursor-pointer items-center gap-1.5 rounded-full border border-[#1677FF]/30 bg-white px-2.5 py-1 text-[11px] text-[#1F3A56] shadow-sm transition-colors hover:border-[#1677FF]/50"
+                title="点击预览附件"
+                role="button"
+                tabindex="0"
+                @click="handlePreviewPendingFile(f)"
+                @keydown.enter.prevent="handlePreviewPendingFile(f)"
+              >
+                <i class="fa-solid fa-spinner fa-spin text-[9px] text-amber-500" v-if="f.status === 'uploading'"></i>
+                <i class="fa-regular fa-file-lines text-[11px] text-[#1677FF]" v-else></i>
+                <span class="max-w-[160px] truncate">{{ f.filename }}</span>
+                <span v-if="f.status === 'uploading'" class="text-amber-500">上传中</span>
+                <span v-else-if="f.status === 'failed'" class="text-red-400">失败</span>
+                <button
+                  type="button"
+                  class="ml-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full text-gray-300 transition-colors hover:bg-red-50 hover:text-red-500"
+                  @click.stop="removePendingFile(f.file_id)"
+                  title="移除"
+                >
+                  <i class="fa-solid fa-xmark text-[8px]"></i>
+                </button>
+              </div>
+            </template>
             <template #model-prefix>
               <ConversationTokenUsage
                 ref="tokenUsagePanelRef"
@@ -2952,6 +3264,7 @@ const handleKeyDown = (event: KeyboardEvent) => {
               />
             </template>
           </ConversationInputBar>
+          </div>
         </div>
       </div>
       <input
@@ -2961,7 +3274,11 @@ const handleKeyDown = (event: KeyboardEvent) => {
         :accept="ACCEPTED_FILE_TYPES.join(',')"
         @change="handleFileSelected"
       />
-      <ConversationTurnNavigator :messages="messages" :container="chatContainerRef" />
+      <ConversationTurnNavigator
+        :messages="messages"
+        :container="chatContainerRef"
+        :turn-offset="turnOffset"
+      />
     </div>
 
     <ConversationWorkspacePanel
@@ -2971,9 +3288,22 @@ const handleKeyDown = (event: KeyboardEvent) => {
       :resolve-tool-call="findToolCallById"
       :conversation-id="localConversationId"
       :run-busy="runBusy"
+      :datasource-id="selectedDatasource"
+      :execution-targets="props.executionTargets"
+      :on-save="handleSaveToDashboard"
       :can-import-semantic-model="props.canImportSemanticModel"
       :format-text="replaceVisiblePathsForDisplay"
       :ensure-conversation-id="ensureConversationId"
+      :document-annotation-handler="handleDocumentAnnotation"
+      :document-annotation-draft="input"
+      :document-annotation-draft-handler="updateDocumentAnnotationDraft"
+      :subagent-tasks="subagentTasks"
+      :subagent-task-details="subagentTaskDetails"
+      :subagent-task-cancelling-ids="cancellingTaskIds"
+      :subagent-task-closing-ids="closingTaskIds"
+      :load-subagent-task-detail="loadSubagentTaskDetail"
+      :cancel-subagent-task="cancelSubagentTask"
+      :close-subagent-session="closeSubagentSession"
       @conversation-created="handlePanelConversationCreated"
       @import-semantic-yaml="emit('importSemanticYaml', $event)"
       @select-tool="selectToolCall"

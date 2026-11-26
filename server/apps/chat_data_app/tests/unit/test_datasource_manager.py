@@ -284,6 +284,51 @@ def _execution_config_resolver(credentials=None):
     return resolve
 
 
+class _FakeQueryContextDao:
+    """get_query_context 只依赖 DAO 的 get_datasource_meta_async，桩掉 DAO 边界。"""
+
+    def __init__(self, meta=None, error=None):
+        self._meta = meta
+        self._error = error
+
+    async def get_datasource_meta_async(self, datasource_id):
+        if self._error is not None:
+            raise self._error
+        return self._meta
+
+
+def _build_manager_with_dao(fake_dao) -> DataSourceManager:
+    manager = DataSourceManager.__new__(DataSourceManager)
+    manager.base_dir = None  # type: ignore[attr-defined]  # __new__ 绕过 __init__，测试直填实例属性
+    manager.datasource_dao = cast(DataSourceDao, fake_dao)
+    return manager
+
+
+def test_get_query_context_returns_stripped_context():
+    """正常路径：取数据源组 query_context 并去除首尾空白。"""
+    meta = {"query_context": "  按机构分库，机构范围用 member_datasource_ids 控制 \n"}
+    manager = _build_manager_with_dao(_FakeQueryContextDao(meta=meta))
+
+    assert asyncio.run(manager.get_query_context("group_a")) == "按机构分库，机构范围用 member_datasource_ids 控制"
+
+
+def test_get_query_context_missing_returns_empty():
+    """缺数据（meta 为 None/无字段/空 id）时返回空串，不影响提示词构建。"""
+    manager = _build_manager_with_dao(_FakeQueryContextDao(meta={"query_context": None}))
+
+    assert asyncio.run(manager.get_query_context("group_a")) == ""
+    assert asyncio.run(manager.get_query_context(None)) == ""
+    manager_no_meta = _build_manager_with_dao(_FakeQueryContextDao(meta=None))
+    assert asyncio.run(manager_no_meta.get_query_context("group_a")) == ""
+
+
+def test_get_query_context_swallows_dao_error():
+    """DAO 异常被兜住返回空串并记日志（提示词缺段可接受，不允许拖垮整轮问数）。"""
+    manager = _build_manager_with_dao(_FakeQueryContextDao(error=RuntimeError("db down")))
+
+    assert asyncio.run(manager.get_query_context("group_a")) == ""
+
+
 def test_normalize_org_codes_accepts_string_list_only():
     assert execution_permission.normalize_org_codes(
         [
@@ -387,7 +432,10 @@ def test_authorized_execution_datasources_apply_same_org_filter(monkeypatch):
     targets = asyncio.run(manager.get_authorized_execution_datasources_async("ds_a", user_id="u1", username="用户1"))
     assert [target["member_datasource_id"] for target in targets] == ["m_http_allowed"]
     assert targets[0]["member_name"] == "HTTP机构A"
-    with pytest.raises(ValueError, match="成员数据源不存在或不属于当前组"):
+    with pytest.raises(
+        ValueError,
+        match="成员数据源不存在或不属于当前组: m_http_denied；当前可用执行对象: m_http_allowed",
+    ):
         asyncio.run(
             manager.get_authorized_execution_datasources_async(
                 "ds_a", ["m_http_denied"], user_id="u1", username="用户1"
@@ -1623,6 +1671,19 @@ def test_datasource_manager_async_crud_paths(monkeypatch):
         _execution_config_resolver({"user": "u", "password": "p"}),
     )
     asyncio.run(run_checks())
+
+
+def test_normalize_selected_member_ids_falls_back_to_template_or_first_member():
+    """业务层唯一兜底：未指定成员时用模板成员，模板缺失时用首个成员；显式传值则原样归一化。"""
+    member_map = {"m1": {}, "m2": {}}
+    assert DataSourceManager._normalize_selected_member_ids({"template_datasource_id": "m2"}, None, member_map) == [
+        "m2"
+    ]
+    assert DataSourceManager._normalize_selected_member_ids({"template_datasource_id": "m2"}, [], member_map) == ["m2"]
+    assert DataSourceManager._normalize_selected_member_ids({}, [], member_map) == ["m1"]
+    assert DataSourceManager._normalize_selected_member_ids(
+        {"template_datasource_id": "missing"}, [" m1 ", "m1", ""], member_map
+    ) == ["m1"]
 
 
 def test_datasource_manager_get_schema_cache_mysql_hive_http_and_errors(monkeypatch):

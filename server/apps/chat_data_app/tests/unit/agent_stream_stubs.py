@@ -58,7 +58,7 @@ class _FakeGraph:
     async def aget_state(self, config):
         return self.state
 
-    async def astream(self, initial_state, config=None, stream_mode=None):
+    async def astream(self, initial_state, config=None, stream_mode=None, context=None):
         self.initial_state = initial_state
         if self.raise_on_stream:
             raise RuntimeError("graph failed")
@@ -93,31 +93,16 @@ async def _collect_async_iter_until_failure(async_iterable):
 def _semantic_context_from_request(**kwargs) -> SemanticConversationContext:
     datasource_id = str(kwargs.get("datasource_id") or "").strip() or None
     semantic_config_id = str(kwargs.get("semantic_config_id") or "").strip() or None
-    selected_ids = list(
-        dict.fromkeys(
-            str(member_id).strip() for member_id in kwargs.get("member_datasource_ids") or [] if str(member_id).strip()
-        )
-    )
     semantic_config = (
         {"id": semantic_config_id, "name": semantic_config_id, "metrics": [], "dimensions": []}
         if semantic_config_id
         else None
     )
-    targets = [
-        {"member_datasource_id": member_id, "member_name": member_id, "org_code": member_id}
-        for member_id in selected_ids
-    ]
-    query = str(kwargs.get("user_query") or "")
-    matched_ids = selected_ids if "所有机构" in query or "全部机构" in query else []
     return SemanticConversationContext(
         datasource_id=datasource_id,
         datasource_meta={"query_context": ""} if datasource_id else None,
         semantic_config_id=semantic_config_id,
         semantic_config=semantic_config,
-        execution_targets=targets,
-        available_member_datasource_ids=selected_ids,
-        matched_member_datasource_ids=matched_ids,
-        selected_member_datasource_ids=selected_ids,
     )
 
 

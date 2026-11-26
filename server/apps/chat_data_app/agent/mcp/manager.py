@@ -6,8 +6,9 @@
   握手——对现有 1.x server 与 2026-07-28 server 同时兼容。
 - 每次枚举/调用按需建连、用完即关，不做常驻连接池；只读场景开销可控。
   （只支持 streamable_http，传输趋于无状态，该取舍与新协议方向一致。）
-- 工具枚举结果按 TTL 缓存（``CHAT_DATA_MCP_TOOLS_CACHE_TTL_SECONDS``），
-  装配 agent 时同步读取缓存，未命中才真正连接。
+- 工具枚举结果按 TTL + 配置指纹缓存（``CHAT_DATA_MCP_TOOLS_CACHE_TTL_SECONDS``），
+  装配 agent 时同步读取缓存，未命中才真正连接；manifest/工具策略一变即失效，
+  不需要重启，也不依赖跨 worker 广播。
 - 单个 server 枚举/调用失败只降级自身，不影响其他 server 与内置工具。
 - 挂到 LangChain 的工具名统一加 ``mcp_`` 前缀并拼接 server id
   （``mcp_<server_id>_<tool>``），与内置注册表名空间隔离，杜绝撞名。
@@ -18,12 +19,14 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import re
 import time
 from collections.abc import AsyncIterator, Callable, Coroutine
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AsyncExitStack, asynccontextmanager
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 from langchain_core.tools import StructuredTool
@@ -178,8 +181,6 @@ def _extract_call_result_text(result: Any) -> str:
             parts.append(text)
     structured = getattr(result, "structuredContent", None)
     if not parts and structured is not None:
-        import json
-
         try:
             parts.append(json.dumps(structured, ensure_ascii=False))
         except (TypeError, ValueError):
@@ -192,6 +193,22 @@ def _extract_call_result_text(result: Any) -> str:
     if str(getattr(result, "resultType", "") or "") == "input_required":
         return f"[mcp tool input_required] 服务端需要补充输入，本次结果不是最终结论: {text}"
     return text
+
+
+def _configs_signature(configs: list[MCPServerConfig]) -> str:
+    """配置指纹：server 增删或工具策略（label/approval/timeout）变化都会换签名。
+
+    枚举结果真正昂贵的是连接 server，配置解析本身很便宜；因此每轮都取一次
+    配置并比对指纹，比在进程间广播失效通知可靠，也能覆盖原地修改 ``plugin.json``。
+    """
+    payload = json.dumps(
+        [asdict(config) for config in configs],
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.blake2s(payload.encode("utf-8"), digest_size=16).hexdigest()
 
 
 class MCPToolManager:
@@ -225,6 +242,7 @@ class MCPToolManager:
         self._config_loader = config_loader or load_mcp_server_configs
         self._tools_cache: list[MCPToolInfo] | None = None
         self._cache_time = 0.0
+        self._cache_signature: str | None = None
         self._effective_cache_ttl = self._cache_ttl
 
     # ---- 枚举 ----
@@ -238,13 +256,17 @@ class MCPToolManager:
         return self._tools_cache is not None and (time.monotonic() - self._cache_time) < self._effective_cache_ttl
 
     async def list_tools_async(self, *, force_refresh: bool = False) -> list[MCPToolInfo]:
-        """枚举全部已配置 MCP server 的工具（带 TTL 缓存）。"""
-        if not force_refresh and self._cache_fresh():
-            return list(self._tools_cache or [])
+        """枚举全部已配置 MCP server 的工具（TTL + 配置指纹缓存）。"""
         configs = self._config_loader()
+        signature = _configs_signature(configs)
+        # 配置指纹先于 TTL 判断：manifest 改了即使 TTL 未到也要重新枚举，
+        # 否则跨 worker 场景会继续用旧 label/approval 最多一个 TTL 周期。
+        if not force_refresh and self._cache_fresh() and self._cache_signature == signature:
+            return list(self._tools_cache or [])
         if not configs:
             self._tools_cache = []
             self._cache_time = time.monotonic()
+            self._cache_signature = signature
             return []
         tools: list[MCPToolInfo] = []
         server_ttls: list[int] = []
@@ -264,6 +286,7 @@ class MCPToolManager:
         tools = _dedupe_qualified_names(tools)
         self._tools_cache = tools
         self._cache_time = time.monotonic()
+        self._cache_signature = signature
         # 服务端通过 CacheableResult.ttlMs 声明的缓存新鲜度提示（2026-07-28，毫秒）：
         # 取全部 server 提示的最小值换算为秒，仅用于缩短（不超过环境默认）且不
         # 永久改写基础配置，避免某 server 的提示拖累其他 server 的工具新鲜度。

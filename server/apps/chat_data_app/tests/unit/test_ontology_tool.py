@@ -382,9 +382,7 @@ class _FakeActionTypeService:
             },
         ]
 
-    async def test_run_action_type_async(
-        self, name, parameters, *, object_key="", operator="", operator_name=""
-    ):
+    async def test_run_action_type_async(self, name, parameters, *, object_key="", operator="", operator_name=""):
         return {
             "object_type_name": "order",
             "proposed_changes": {"objects": [], "links": []},

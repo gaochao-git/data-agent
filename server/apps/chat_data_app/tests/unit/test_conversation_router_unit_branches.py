@@ -64,10 +64,14 @@ def test_registration_and_auth_helpers(router_state, monkeypatch):
     assert conversation_router.get_agent_config("agent_a")["get_graph"] is not None
 
     monkeypatch.setattr(
-        conversation_router, "get_forwarded_user", lambda _request: SimpleNamespace(username="name-only")
+        conversation_router, "get_forwarded_user", lambda _request: SimpleNamespace(user_id="", username="name-only")
     )
     assert conversation_router._get_user_id(FakeRequest()) == "name-only"
     assert conversation_router._get_current_user_identity(FakeRequest()) == ("name-only", "name-only")
+    monkeypatch.setattr(
+        conversation_router, "get_forwarded_user", lambda _request: SimpleNamespace(user_id="u1", username="")
+    )
+    assert conversation_router._get_current_user_identity(FakeRequest()) == ("u1", "")
 
     def raise_auth(_request):
         raise AuthenticationError("bad token", status_code=401)
@@ -508,7 +512,7 @@ async def test_get_conversation_context_returns_business_datasource(router_state
     monkeypatch.setattr(conversation_router.conversation, "get_datasource_id", get_datasource_id)
 
     result = payload(await conversation_router.get_conversation_context("conv", request))
-    assert result["data"] == {"conversation_id": "conv", "datasource_id": "ds_a"}
+    assert result["data"] == {"conversation_id": "conv", "datasource_id": "ds_a", "model_id": None}
 
 
 @pytest.mark.asyncio
@@ -778,13 +782,13 @@ async def test_steer_enqueue_normalizes_meta(steer_router_state):
     calls = steer_router_state
     request = conversation_router.SteerRequest(
         query="带引用",
-        file_selections=["uploads/a.pdf", "/workspace/semantic/a__1.yaml/", "uploads/a.pdf", " "],
+        file_selections=["uploads/a.pdf", "/workspace/.system/semantic/a__1.yaml/", "uploads/a.pdf", " "],
         file_ids=[" file-1 ", "file-2", "file-1", ""],
     )
     response = await conversation_router.steer("conv-1", request, FakeRequest())
     assert payload(response)["code"] == ErrorCode.SUCCESS
     assert calls["enqueue"]["meta"] == {
-        "file_selections": ["uploads/a.pdf", "workspace/semantic/a__1.yaml"],
+        "file_selections": ["uploads/a.pdf", "workspace/.system/semantic/a__1.yaml"],
         "file_ids": ["file-1", "file-2"],
     }
 

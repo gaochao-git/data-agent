@@ -20,8 +20,8 @@ REPO_ROOT = Path(__file__).resolve().parents[5]
 FRONTEND_CHART_TYPES_PATH = REPO_ROOT / "web-vue" / "src" / "views" / "chat-data" / "chartTypes.ts"
 # 图表类型清单的文档维护点是数据分析技能的看板主指南；SKILL.md 不重复罗列类型
 # （类型清单另有 chart_types.py 注册表与 get_chart_type_prompt_text 两处声明）。
-# 读的是 git 跟踪的种子技能目录（agent/skills），不是机器本地的运行时副本
-# CHAT_DATA_HOME/skills/system——后者不入库、会与种子漂移。
+# 读的是 git 跟踪的技能目录（agent/skills），它同时是运行时唯一真值；
+# 不再存在 CHAT_DATA_HOME/skills/system 那份会漂移的部署副本。
 SKILL_DOC_PATHS = [
     REPO_ROOT
     / "server"

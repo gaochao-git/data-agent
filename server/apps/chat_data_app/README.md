@@ -89,7 +89,7 @@ SQL 查询（人工写 SQL）──────────────┐
 
 数据智能体是唯一的 `chat_data` Agent，共用会话 SSE 入口，不直接走 SQL 查询页面的提交按钮。运行时始终提供会话工作区和文件工具；`workspace_backend`（运行环境）只决定工作区跑在受限本地目录还是 OpenSandbox；工具是否注册由 `tools/registry.py` 的 `ToolDefinition.enabled` 单一控制（`bash_run` 默认关闭）。
 
-ChatData 文件型数据统一位于 `CHAT_DATA_HOME`（**必填**，应用唯一数据根，禁止回退到其它变量推导）：会话路径为 `threads/{user_id}/{创建日期YYYY-MM-DD}/{conversation_id}/user-data/`（按会话创建日期归档，路径统一由 `utils.storage_paths.conversation_thread_dir` 拼装），其中固定创建 `workspace/`、`outputs/`、`uploads/`，查询结果统一保存到 `outputs/query_result/<id>.json`，普通工具大结果保存到 `outputs/.tool-offload/<id>.json|txt`。查询工具只返回简短元数据和受会话约束的 `result_id`、`result_path=/mnt/user-data/outputs/query_result/<id>.json`；前端按 `result_id` 回放完整结果，Agent 后续分析按 `result_path` 使用 `file_read` 或 Bash 读取。两个系统目录均不出现在工作区文件列表，`file_edit`、`file_copy`、`file_move`、`file_delete`、`present_artifacts` 与技能导入均拒绝它们，因此不作为用户产物。前端请求时携带会话 ID，服务端完成用户归属校验后按固定路径读取。系统技能位于 `CHAT_DATA_HOME/skills/system/`，用户技能位于 `CHAT_DATA_HOME/skills/user/{user_id}/<skill-name>/versions/vN/`；管理域不直接暴露给模型，每个会话在创建/首次运行时构建技能快照 `threads/{user_id}/{创建日期YYYY-MM-DD}/{conversation_id}/runtime-skills/`（系统技能 + 自己已发布 + 他人 global 已发布，会话内冻结不变），通过 Files API 上传到 sandbox 的扁平 `/mnt/skills/<技能名>/`；sandbox 也通过 Files API 上传 `/mnt/user-data`，操作完成后下载 `workspace/`、`outputs/` 变更回应用侧，不使用宿主机目录挂载。系统技能由发布流程从代码包复制到 `skills/system/`，运行时只读且不依赖技能数据库。
+ChatData 文件型数据统一位于 `CHAT_DATA_HOME`（**必填**，应用唯一数据根，禁止回退到其它变量推导）：会话路径为 `threads/{user_id}/{创建日期YYYY-MM-DD}/{conversation_id}/user-data/`（按会话创建日期归档，路径统一由 `utils.storage_paths.conversation_thread_dir` 拼装），其中固定创建 `workspace/`、`outputs/`、`uploads/`，查询结果统一保存到 `workspace/.system/query_result/<id>.json`，普通工具大结果保存到 `workspace/.system/tool-offload/<id>.json|txt`。查询工具只返回简短元数据和受会话约束的 `result_id`、`result_path=/mnt/user-data/workspace/.system/query_result/<id>.json`；前端按 `result_id` 回放完整结果，Agent 后续分析按 `result_path` 使用 `file_read` 或 Bash 读取。两个系统目录均不出现在工作区文件列表，`file_edit`、`file_copy`、`file_move`、`file_delete`、`present_artifacts` 与技能导入均拒绝它们，因此不作为用户产物。前端请求时携带会话 ID，服务端完成用户归属校验后按固定路径读取。系统技能直接读代码包 `apps/chat_data_app/agent/skills/`（不落数据根），用户技能位于 `CHAT_DATA_HOME/skills/user/{user_id}/<skill-name>/versions/vN/`；管理域不直接暴露给模型，按用户共享技能快照 `threads/{user_id}/runtime/skills/`（系统技能 + 自己已发布 + 他人 global 已发布，指纹一致则复用、变更时原子重建，单轮执行期间保持稳定），通过 Files API 上传到 sandbox 的扁平 `/mnt/skills/<技能名>/`；sandbox 也通过 Files API 上传 `/mnt/user-data`，操作完成后下载 `workspace/`、`outputs/` 变更回应用侧，不使用宿主机目录挂载。系统技能直读代码包 `agent/skills/`，发布流程不再复制到 `skills/system/`，运行时只读且不依赖技能数据库。
 
 应用多实例的持久化存储和并发协调由部署层负责，代码不实现跨节点文件同步。生产 checkpoint 必须使用 MySQL，不使用共享目录上的 SQLite。
 
@@ -114,7 +114,7 @@ ChatData 文件型数据统一位于 `CHAT_DATA_HOME`（**必填**，应用唯�
 
 - **文件工具（`file_read` / `file_edit` / `file_write` / `file_move` / `file_copy` / `file_delete` / `file_glob` / `file_grep` / `dir_create` / `dir_list` / `dir_delete` / `present_artifacts`）始终可用且始终严格路径管控**。工具只调用 `ConversationWorkspaceRuntime`；运行时将读写、目录遍历和产物解析委托给 `WorkspaceBackend`。会话开始前构建可见技能快照，模型通过 `file_read` 只读访问 `/mnt/skills/<name>/SKILL.md` 及其在技能入口中声明的资源。`local` 直接访问受控会话目录，`sandbox` 经 OpenSandbox Files API 访问一次性沙箱副本，不允许工具层按 backend 分支或直接读宿主路径。Bash 工具默认由 `ToolDefinition.enabled=false` 关闭。
 - **隔离模式属于部署能力**：只由 `CHAT_DATA_DEFAULT_WORKSPACE_BACKEND` 决定，**不再接受前端动态传参**；工具启停由 `ToolDefinition.enabled` 控制。
-- **工具审批（B 端固定策略）**：系统工具通过 `SYSTEM_TOOL_APPROVALS` 映射配置，当前统一 allow，MCP 动态工具默认需审批（插件 `mcp_servers[].tools.<name>.approval=allow` 豁免，`mcp_tool_search` 只读检索除外）；每个工具档位固定为 `ask/allow`，用户不可切换。审批卡只提供「允许 / 拒绝」，并行工具调用合并为一张卡逐条选择，不产生本轮/本会话持久授权。无人值守运行（定时任务/评测）不装配审批中间件，ask 工具在装配层 fail-closed 剔除；子智能体不继承 MCP 动态工具。中间件实现见 `agent/middleware/tool_approval.py`。
+- **工具审批（B 端固定策略）**：系统工具通过 `SYSTEM_TOOL_APPROVALS` 映射配置，当前统一 allow，MCP 动态工具默认需审批（插件 `mcp_servers[].tools.<name>.approval=allow` 豁免，`mcp_tool_search` 只读检索除外）；每个工具档位固定为 `ask/allow`，用户不可切换。审批卡只提供「允许 / 拒绝」，并行工具调用合并为一张卡逐条选择，不产生本轮/本会话持久授权。无人值守运行（定时任务/评测）不装配审批中间件，ask 工具在装配层 fail-closed 剔除；explore 子智能体不继承 MCP 动态工具，general 继承 MCP 实体工具但 ask 档仍剔除、检索网关仍只属于主图。中间件实现见 `agent/middleware/tool_approval.py`。
 
 ```text
 index.vue
@@ -477,7 +477,7 @@ chat_data_app/
 │   ├── tools/             # 工具包
 │   ├── config.py          # 模式配置
 │   ├── prompts/           # 提示词模板和 system prompt builder
-│   └── skills/            # 系统技能源目录；发布时复制到 CHAT_DATA_HOME/skills/system
+│   └── skills/            # 系统技能源目录；运行时直读，不再复制到数据根
 ├── services/
 │   ├── datasource_manager.py          # 数据源管理
 │   └── datasource_metadata.py         # MySQL/Hive 物理元数据实现、适配器与注册表

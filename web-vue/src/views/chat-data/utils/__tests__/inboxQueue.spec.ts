@@ -82,7 +82,7 @@ describe('inboxQueue', () => {
         content: '内容-m1',
         queue_type: 'next-turn',
         status: 'claimed',
-        meta: { file_selections: ['workspace/semantic/a__1.yaml'], file_ids: ['file-9'] },
+        meta: { file_selections: ['workspace/.system/semantic/a__1.yaml'], file_ids: ['file-9'] },
         create_time: '2026-08-14T10:00:00',
       },
     ], new Set())
@@ -118,11 +118,11 @@ describe('inboxQueue', () => {
     // 否则实时会话无 chip、刷新后历史回放才有（file_selections 来自事件 payload）
     const withMention: InboxQueueItem = {
       ...queued('m1', 'consumed'),
-      fileSelections: ['workspace/semantic/订单模型__444139.yaml'],
+      fileSelections: ['workspace/.system/semantic/订单模型__444139.yaml'],
     }
     const result = admitInboxMessages([withMention], [], ['m1'])
     expect(result.messages).toHaveLength(1)
-    expect(result.messages[0]!.fileSelections).toEqual(['workspace/semantic/订单模型__444139.yaml'])
+    expect(result.messages[0]!.fileSelections).toEqual(['workspace/.system/semantic/订单模型__444139.yaml'])
 
     // 无快照的消息不挂空数组字段（保持与纯文本消息同形）
     const plain = admitInboxMessages([queued('m2', 'consumed')], [], ['m2'])

@@ -114,9 +114,7 @@ class OntologyActionObjectDao:
             )
             return _row_to_dict(row) if row is not None else None
 
-    async def get_object_including_deleted_async(
-        self, object_type_id: int, object_key: str
-    ) -> dict[str, Any] | None:
+    async def get_object_including_deleted_async(self, object_type_id: int, object_key: str) -> dict[str, Any] | None:
         """取对象行（含已删除），用于判断「同主键重建」是否属于新实例。"""
         async with session_scope() as session:
             row = (

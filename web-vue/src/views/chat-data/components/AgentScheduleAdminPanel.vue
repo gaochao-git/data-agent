@@ -53,7 +53,7 @@ const statCards = computed(() => {
   return [
     { label: '定时任务', value: data ? `${data.enabled_jobs}/${data.total_jobs}` : '-', hint: '启用中 / 总数' },
     { label: '累计执行', value: data ? String(data.total_runs) : '-', hint: `近24h ${data?.runs_last_24h ?? 0} 次` },
-    { label: '执行成功率', value: successRate.value, hint: `失败 ${data?.failed_runs ?? 0} · 取消 ${data?.cancelled_runs ?? 0} · 跳过 ${data?.skipped_runs ?? 0}` },
+    { label: '执行成功率', value: successRate.value, hint: `失败 ${data?.failed_runs ?? 0} · 取消 ${data?.cancelled_runs ?? 0} · 中断 ${data?.interrupted_runs ?? 0} · 跳过 ${data?.skipped_runs ?? 0}` },
     { label: '执行中', value: data ? String(data.running_runs) : '-', hint: '排队/领取/执行中' }
   ]
 })
@@ -396,6 +396,11 @@ defineExpose({ ensureLoaded })
         <el-table-column label="取消" width="65" align="right">
           <template #default="{ row }">
             <span :class="row.cancelled_count ? 'text-amber-500 font-medium' : 'text-slate-400'">{{ row.cancelled_count || 0 }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="中断" width="65" align="right">
+          <template #default="{ row }">
+            <span :class="row.interrupted_count ? 'text-amber-500 font-medium' : 'text-slate-400'">{{ row.interrupted_count || 0 }}</span>
           </template>
         </el-table-column>
         <el-table-column label="最近执行" min-width="215">

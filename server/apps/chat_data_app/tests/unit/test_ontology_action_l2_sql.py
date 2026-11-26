@@ -33,7 +33,10 @@ os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
 from apps.chat_data_app.daos import dao_session
-from apps.chat_data_app.daos.ontology_action_execution_dao import OntologyActionExecutionDao
+from apps.chat_data_app.daos.ontology_action_execution_dao import (
+    ActionExecutionOptions,
+    OntologyActionExecutionDao,
+)
 from apps.chat_data_app.daos.ontology_action_object_dao import OntologyActionObjectDao
 from apps.chat_data_app.daos.ontology_object_instance_dao import OntologyObjectInstanceDao
 from apps.chat_data_app.services.ontology import schema_check
@@ -58,9 +61,7 @@ def db(monkeypatch):
             await connection.execute(
                 text("CREATE TABLE orders (order_no TEXT PRIMARY KEY, pay_status TEXT, amount TEXT)")
             )
-            await connection.execute(
-                text("INSERT INTO orders VALUES ('ORD2024000001', 'unpaid', '100')")
-            )
+            await connection.execute(text("INSERT INTO orders VALUES ('ORD2024000001', 'unpaid', '100')"))
 
     asyncio.run(create_tables())
     factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -142,15 +143,11 @@ def _ddl_text() -> str:
 def _ddl_declared_columns(table: str, text_ddl: str) -> set[str]:
     """从「CREATE TABLE + ADD COLUMN + CHANGE COLUMN」推导出文档声明的最终列集合。"""
     declared: set[str] = set()
-    for block in re.finditer(
-        r"CREATE TABLE `" + re.escape(table) + r"` \((.*?)\n\) ENGINE", text_ddl, re.S
-    ):
+    for block in re.finditer(r"CREATE TABLE `" + re.escape(table) + r"` \((.*?)\n\) ENGINE", text_ddl, re.S):
         declared |= set(re.findall(r"^\s*`(\w+)`", block.group(1), re.M))
     for stmt in re.finditer(r"ALTER TABLE `" + re.escape(table) + r"`(.*?);", text_ddl, re.S):
         declared |= set(re.findall(r"ADD COLUMN `(\w+)`", stmt.group(1)))
-        for old, new in re.findall(
-            r"CHANGE COLUMN `(\w+)`\s+`(\w+)`", stmt.group(1)
-        ):
+        for old, new in re.findall(r"CHANGE COLUMN `(\w+)`\s+`(\w+)`", stmt.group(1)):
             declared.discard(old)
             declared.add(new)
     return declared
@@ -227,7 +224,7 @@ def test_execution_round_trip_persists_baseline_and_fields(db):
             operator="u1",
             action_type_version=3,
             baseline=baseline,
-            conflict_check_level="object",
+            options=ActionExecutionOptions(conflict_check_level="object"),
         )
     )
     fetched = asyncio.run(dao.get_execution_async(created["id"]))
@@ -302,9 +299,7 @@ def test_latest_edit_picks_last_write_for_revert_guard(db):
                 action_type_name="update_order_status",
             )
         )
-    assert asyncio.run(dao.latest_object_values_async(OBJECT_TYPE_ID, OBJECT_KEY, 1)) == {
-        "pay_status": "shipped"
-    }
+    assert asyncio.run(dao.latest_object_values_async(OBJECT_TYPE_ID, OBJECT_KEY, 1)) == {"pay_status": "shipped"}
     latest = asyncio.run(dao.latest_edit_async(OBJECT_TYPE_ID, OBJECT_KEY, 1))
     assert latest["execution_id"] == ids[-1], "撤销必须用最后一条编辑判定，不能按属性取"
 
@@ -378,8 +373,7 @@ def test_revert_execution_row_links_back(db):
             object_key=OBJECT_KEY,
             parameters={},
             edits=[{"operation": "set_property", "property": "pay_status", "resolved_value": "unpaid"}],
-            revert_of_execution_id=original["id"],
-            conflict_check_level="off",
+            options=ActionExecutionOptions(conflict_check_level="off", revert_of_execution_id=original["id"]),
         )
     )
     fetched = asyncio.run(dao.get_execution_async(revert["id"]))
@@ -399,19 +393,13 @@ def test_instance_lifecycle_delete_restore_revive(db):
     dao = _instance_dao()
     created = asyncio.run(dao.ensure_active_async(object_type_id=OBJECT_TYPE_ID, object_key=OBJECT_KEY))
     assert created["generation"] == 1 and created["lifecycle_status"] == "active"
-    deleted = asyncio.run(
-        dao.mark_deleted_async(object_type_id=OBJECT_TYPE_ID, object_key=OBJECT_KEY, execution_id=11)
-    )
+    deleted = asyncio.run(dao.mark_deleted_async(object_type_id=OBJECT_TYPE_ID, object_key=OBJECT_KEY, execution_id=11))
     assert deleted["lifecycle_status"] == "deleted" and deleted["generation"] == 1
     assert asyncio.run(dao.deleted_keys_async(OBJECT_TYPE_ID, [OBJECT_KEY])) == {OBJECT_KEY}
-    restored = asyncio.run(
-        dao.restore_async(object_type_id=OBJECT_TYPE_ID, object_key=OBJECT_KEY, execution_id=12)
-    )
+    restored = asyncio.run(dao.restore_async(object_type_id=OBJECT_TYPE_ID, object_key=OBJECT_KEY, execution_id=12))
     assert restored["lifecycle_status"] == "active"
     assert restored["generation"] == 1, "撤销删除不是重建，代际不能变"
-    revived = asyncio.run(
-        dao.revive_async(object_type_id=OBJECT_TYPE_ID, object_key=OBJECT_KEY, execution_id=13)
-    )
+    revived = asyncio.run(dao.revive_async(object_type_id=OBJECT_TYPE_ID, object_key=OBJECT_KEY, execution_id=13))
     assert revived["generation"] == 2 and revived["lifecycle_status"] == "active"
     assert asyncio.run(dao.deleted_keys_async(OBJECT_TYPE_ID, [OBJECT_KEY])) == set()
     instances = asyncio.run(dao.instances_async(OBJECT_TYPE_ID, [OBJECT_KEY]))
@@ -423,9 +411,7 @@ def test_instance_unique_key_prevents_duplicate_rows(db):
     _seed_object_type(factory)
     dao = _instance_dao()
     first = asyncio.run(dao.ensure_active_async(object_type_id=OBJECT_TYPE_ID, object_key=OBJECT_KEY))
-    second = asyncio.run(
-        dao.ensure_active_async(object_type_id=OBJECT_TYPE_ID, object_key=OBJECT_KEY, execution_id=42)
-    )
+    second = asyncio.run(dao.ensure_active_async(object_type_id=OBJECT_TYPE_ID, object_key=OBJECT_KEY, execution_id=42))
     assert first["id"] == second["id"], "同一 (type, key) 只能有一行实例"
 
 
@@ -502,17 +488,19 @@ def _install_e2e(monkeypatch, factory):
     async def fake_target(_name):
         return detail
 
-    async def fake_read_object_projection(
-        object_type_name, object_key, *, with_source_values=False, **_kwargs
-    ):
+    async def fake_read_object_projection(object_type_name, object_key, *, with_source_values=False, **_kwargs):
         local_key = str(object_key).split(":")[-1]
         async with dao_session.get_session() as session:
             row = (
-                await session.execute(
-                    text("SELECT order_no, pay_status, amount FROM orders WHERE order_no = :key"),
-                    {"key": local_key},
+                (
+                    await session.execute(
+                        text("SELECT order_no, pay_status, amount FROM orders WHERE order_no = :key"),
+                        {"key": local_key},
+                    )
                 )
-            ).mappings().first()
+                .mappings()
+                .first()
+            )
         if row is None:
             raise ObjectProjectionError(f"对象不存在: {object_key}")
         source = dict(row)
@@ -598,9 +586,7 @@ def test_e2e_dry_run_execute_read_back_revert_read_back(db, monkeypatch):
     assert after_write["object_generation"] == 1
 
     # 4) 撤销：追加反向编辑
-    revert = asyncio.run(
-        service.revert_execution_async("update_order_status", execution_id, operator="u1")
-    )
+    revert = asyncio.run(service.revert_execution_async("update_order_status", execution_id, operator="u1"))
     assert revert["reverted_execution_id"] == execution_id
     assert revert["reversed_edits"][0]["resolved_value"] == "unpaid"
     assert _count(factory, "chat_data_ontology_action_execution") == 2
@@ -712,9 +698,7 @@ def test_e2e_delete_two_step_then_revert_restores_visibility(db, monkeypatch):
     service = _service()
     asyncio.run(service.upsert_action_type_async("delete_order", _delete_action_payload(), operator="u1"))
     preview = asyncio.run(
-        service.test_run_action_type_async(
-            "delete_order", {}, object_key="ORD2024000001", operator="u1"
-        )
+        service.test_run_action_type_async("delete_order", {}, object_key="ORD2024000001", operator="u1")
     )
     assert (preview.get("baseline") or {}).get("row_hash"), "删除的试运行也要返回基线"
     executed = asyncio.run(
@@ -752,9 +736,7 @@ def test_e2e_delete_stale_baseline_is_rejected(db, monkeypatch):
     service = _service()
     asyncio.run(service.upsert_action_type_async("delete_order", _delete_action_payload(), operator="u1"))
     preview = asyncio.run(
-        service.test_run_action_type_async(
-            "delete_order", {}, object_key="ORD2024000001", operator="u1"
-        )
+        service.test_run_action_type_async("delete_order", {}, object_key="ORD2024000001", operator="u1")
     )
 
     async def bump_source():

@@ -47,6 +47,28 @@ describe('ConversationTurnNavigator', () => {
     container.remove()
   })
 
+  it('numbers turns by real ordinal when only the tail window is loaded', async () => {
+    const { container } = createContainer()
+    const tailTurns = turns.map(item => ({ ...item, content: '' }))
+    const wrapper = mount(ConversationTurnNavigator, {
+      props: { messages: tailTurns, container, turnOffset: 2 },
+      attachTo: document.body,
+    })
+
+    const dots = wrapper.findAll('nav button')
+    expect(dots).toHaveLength(6)
+    expect(dots[0]!.attributes('aria-label')).toBe('定位到第 3 次提问：空消息')
+    expect(dots[5]!.attributes('aria-label')).toBe('定位到第 8 次提问：空消息')
+
+    await wrapper.trigger('mouseenter')
+    const rows = wrapper.findAll('button')
+    expect(rows[0]!.text()).toContain('第 3 次提问')
+    expect(rows[5]!.text()).toContain('第 8 次提问')
+
+    wrapper.unmount()
+    container.remove()
+  })
+
   it('does not show the navigator for a short conversation that fits in one screen', async () => {
     const { container } = createContainer(700)
     const wrapper = mount(ConversationTurnNavigator, {

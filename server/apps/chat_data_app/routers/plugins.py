@@ -7,9 +7,11 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from utils.error_codes import ErrorCode
 from utils.logger import get_logger
@@ -51,6 +53,13 @@ class PluginEnabledRequest(BaseModel):
     """插件启停请求。"""
 
     enabled: bool
+
+
+class PluginPermissionRequest(BaseModel):
+    """插件人员授权请求；username 唯一且保留大小写。"""
+
+    scope_type: Literal["all", "selected"]
+    user_names: list[str] = Field(default_factory=list)
 
 
 @router.get("/admin/plugins")
@@ -149,7 +158,15 @@ async def install_plugin(file: UploadFile, request: Request) -> JSONResponse:
             operator_name=operator_name,
         )
         return business_response(
-            data={"plugin": manifest.to_dict(), "effective": "新会话与下一次装配生效"},
+            data={
+                "plugin": {
+                    **manifest.to_dict(),
+                    "enabled": True,
+                    "scope_type": "all",
+                    "user_names": [],
+                },
+                "effective": "新会话与下一次装配生效",
+            },
             msg="插件安装成功",
         )
     except PluginInstallError as e:
@@ -188,6 +205,47 @@ async def update_plugin_enabled(plugin_id: str, payload: PluginEnabledRequest, r
         logger.error("切换插件启停失败: %s", e, exc_info=True)
         return business_response(
             msg="切换插件状态失败，请稍后重试", code=ErrorCode.CHATDATA_PLUGIN_OPERATION_FAILED, status="error"
+        )
+
+
+@router.put("/admin/plugins/{plugin_id}/permissions")
+async def update_plugin_permissions(
+    plugin_id: str,
+    payload: PluginPermissionRequest,
+    request: Request,
+) -> JSONResponse:
+    """设置插件对全部用户或指定 username 可用；只影响插件及其技能。"""
+    try:
+        operator_id, operator_name = _resolve_operator(request)
+        result = await plugin_service.set_plugin_permissions(
+            plugin_id,
+            scope_type=payload.scope_type,
+            user_names=payload.user_names,
+            operator_id=operator_id,
+            operator_name=operator_name,
+        )
+        if result is None:
+            return business_response(
+                msg=f"插件不存在: {plugin_id}",
+                code=ErrorCode.CHATDATA_PLUGIN_NOT_FOUND,
+                status="error",
+            )
+        return business_response(
+            data={"name": plugin_id, **result},
+            msg="插件授权已更新",
+        )
+    except ValueError as e:
+        return business_response(
+            msg=str(e),
+            code=ErrorCode.CHATDATA_PLUGIN_PERMISSION_INVALID,
+            status="error",
+        )
+    except Exception as e:
+        logger.error("更新插件授权失败: plugin=%s error=%s", plugin_id, e, exc_info=True)
+        return business_response(
+            msg="更新插件授权失败，请稍后重试",
+            code=ErrorCode.CHATDATA_PLUGIN_PERMISSION_UPDATE_FAILED,
+            status="error",
         )
 
 

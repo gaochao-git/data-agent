@@ -72,11 +72,13 @@ def _state_with(messages) -> SimpleNamespace:
 @pytest.mark.asyncio
 async def test_persist_timestamp_returns_state_when_no_ai_message():
     """消息里没有 AIMessage 时直接原样返回，不触碰 agent（305->304、308->309）。"""
+    agent = _FakeTimestampAgent()
     state = _state_with([HumanMessage(content="用户问题"), ToolMessage(content="工具结果", tool_call_id="c1")])
 
-    result = await agent_stream._persist_latest_ai_message_timestamp(_FakeTimestampAgent(), {"configurable": {}}, state)
+    result = await agent_stream._persist_latest_ai_message_timestamp(agent, {"configurable": {}}, state)
 
     assert result is state
+    assert agent.aupdate_calls == []  # docstring 声称「不触碰 agent」，由调用记录证明
 
 
 @pytest.mark.asyncio
@@ -137,13 +139,18 @@ async def test_persist_generation_stats_writes_even_when_timestamp_present():
 
 
 @pytest.mark.asyncio
-async def test_persist_timestamp_skips_when_agent_cannot_update_state():
-    """agent 没有 aupdate_state 时直接放弃，不抛错（311->312）。"""
-    state = _state_with([AIMessage(content="答案")])
+async def test_persist_timestamp_skips_when_agent_cannot_update_state(monkeypatch):
+    """agent 没有 aupdate_state 时直接短路放弃，不抛错也不触发写入失败兜底（311->312）。"""
+    warnings: list[str] = []
+    monkeypatch.setattr(agent_run_support.logger, "warning", lambda *args, **kwargs: warnings.append(str(args[0])))
+    message = AIMessage(content="答案")
+    state = _state_with([message])
 
     result = await agent_stream._persist_latest_ai_message_timestamp(object(), {"configurable": {}}, state)
 
     assert result is state
+    assert warnings == []  # 走的是短路，不是 aupdate_state 抛错后的吞错告警
+    assert "timestamp" not in message.additional_kwargs
 
 
 @pytest.mark.asyncio
@@ -180,11 +187,14 @@ async def test_persist_timestamp_falls_back_to_state_when_agent_has_no_aget_stat
 async def test_persist_timestamp_swallows_agent_update_failure():
     """aupdate_state 抛错只告警，不向上冒泡（319-321）。"""
     agent = _FakeTimestampAgent(aupdate_error=RuntimeError("checkpointer unavailable"))
-    state = _state_with([AIMessage(content="答案")])
+    message = AIMessage(content="答案")
+    state = _state_with([message])
 
     result = await agent_stream._persist_latest_ai_message_timestamp(agent, {"configurable": {}}, state)
 
     assert result is state
+    assert len(agent.aupdate_calls) == 1  # 确实尝试过写入，不是提前短路
+    assert "timestamp" not in message.additional_kwargs  # 失败后原消息未被就地盖章
 
 
 # --------------------------------------------------------------------------- #
@@ -212,11 +222,21 @@ async def test_persist_agent_turn_history_uses_state_override_without_touching_a
 
 
 @pytest.mark.asyncio
-async def test_persist_partial_agent_turn_history_noop_without_adapter():
-    """adapter 为 None 时静默返回，不抛异常（543->544）。"""
-    await agent_run_support._persist_partial_agent_turn_history(
+async def test_persist_partial_agent_turn_history_noop_without_adapter(monkeypatch):
+    """adapter 为 None 时直接返回，不触碰历史补写链路（543->544）。"""
+    calls: list[dict] = []
+
+    async def fake_persist(adapter, **kwargs):
+        calls.append({"adapter": adapter, **kwargs})
+
+    monkeypatch.setattr(agent_run_support, "_persist_agent_turn_history", fake_persist)
+
+    result = await agent_run_support._persist_partial_agent_turn_history(
         None, conversation_id="conv-1", user_id="u1", username=None, turn_id="turn-1"
     )
+
+    assert result is None
+    assert calls == []
 
 
 # --------------------------------------------------------------------------- #
@@ -488,12 +508,14 @@ def test_handle_tool_call_chunks_skips_non_dict_entries():
 
 
 def test_handle_tool_call_chunks_without_name_keeps_id_only():
-    """有 id 没 name 时不写入工具名，也因拿不到工具名而不发 running 事件（740->742、747->750）。"""
+    """有 id 没 name 时不写入工具名、不发 running；首片参数仍按新语义立即预览。"""
     state = agent_stream._ToolStreamState()
 
     events = state.handle_tool_call_chunks([{"id": "call-9", "args": "{}"}])
 
-    assert events == []
+    assert len(events) == 1
+    assert "event: tool_args_delta" in events[0]
+    assert "running" not in events[0]
     assert state.active_tool_call_id == "call-9"
     assert "call-9" not in state.tool_names
 
@@ -512,8 +534,11 @@ def test_handle_tool_call_chunks_records_index_and_emits_running():
     assert state.tool_names["call-x"] == "file_read"
     assert state.args_buffer["call-x"] == '{"pa'
     # _running_event 一次补发「工具开始」+「工具执行中」两条事件
-    assert len(events) == 2
-    assert all("running" in event and "file_read" in event for event in events)
+    running_events = [event for event in events if "running" in event]
+    assert len(running_events) == 2
+    assert all("file_read" in event for event in running_events)
+    # 首片参数立即预览，不再等 32 字符阈值
+    assert len([event for event in events if "event: tool_args_delta" in event]) == 1
 
 
 def test_handle_tool_call_chunks_resolves_id_from_index_map():
@@ -573,6 +598,185 @@ def test_build_tool_message_payload_skips_args_without_tool_call_id():
     assert state.args_buffer == {"": "ignored"}
 
 
+def test_reconcile_state_messages_cancels_announced_but_unexecuted_tool_calls():
+    """流式播报过、但最终 AIMessage 不包含的工具调用要收口为「未执行」，不能一直转。"""
+    state = agent_stream._ToolStreamState()
+    state.handle_tool_call_chunks(
+        [
+            {"id": "ghost-1", "name": "officecli_run", "index": 0, "args": '{"intent":"验证 OfficeCLI 可用"}'},
+        ]
+    )
+    final_ai = AIMessage(
+        content="",
+        tool_calls=[{"id": "real-1", "name": "file_read", "args": {"path": "/a"}}],
+    )
+
+    events = state.reconcile_state_messages([final_ai])
+
+    assert len(events) == 1
+    assert "tool_failed" in events[0]
+    data = json.loads(events[0].split("data:", 1)[1])
+    assert data["tool_call_id"] == "ghost-1"
+    assert "未执行" in data["content"]
+    assert "ghost-1" not in state.running_tool_ids
+    # 同一快照重复到达不重复下发
+    assert state.reconcile_state_messages([final_ai]) == []
+
+
+def test_reconcile_state_messages_backfills_tool_message_missing_from_stream():
+    """after_model 等中间件生成的 ToolMessage 只出现在 values 时，补发完成事件。"""
+    state = agent_stream._ToolStreamState()
+    state.handle_tool_calls([{"id": "todos-1", "name": "write_todos", "args": {"todos": []}}])
+    ai = AIMessage(
+        content="",
+        tool_calls=[{"id": "todos-1", "name": "write_todos", "args": {"todos": []}}],
+    )
+    rejected = ToolMessage(
+        content="Error: write_todos should never be called multiple times",
+        tool_call_id="todos-1",
+        name="write_todos",
+        status="error",
+    )
+
+    events = state.reconcile_state_messages([ai, rejected])
+
+    assert len(events) == 2
+    assert "tool_failed" in events[0]
+    data = json.loads(events[0].split("data:", 1)[1])
+    assert data["tool_call_id"] == "todos-1"
+    assert "multiple times" in data["content"]
+    assert "todos-1" not in state.running_tool_ids
+    assert state.reconcile_state_messages([ai, rejected]) == []
+
+
+def test_reconcile_state_messages_publishes_authoritative_args_from_ai_message():
+    """最终 AIMessage 参数是权威口径：补发完整快照，替换流式中间版本。"""
+    state = agent_stream._ToolStreamState()
+    state.handle_tool_call_chunks(
+        [
+            {
+                "id": "sub-1",
+                "name": "subagent",
+                "index": 0,
+                "args": '{"subagent_type":"general","label":"统计脚本","background":false,"timeout_seconds":60}',
+            }
+        ]
+    )
+    # 流式阶段已经下发过一版参数（含最终调用没有的 background、且 timeout 是旧值）
+    state.args_fallback["sub-1"] = {
+        "subagent_type": "general",
+        "label": "统计脚本",
+        "background": False,
+        "timeout_seconds": 60,
+    }
+    ai = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "id": "sub-1",
+                "name": "subagent",
+                "args": {
+                    "action": "start",
+                    "subagent_type": "general",
+                    "label": "统计脚本",
+                    "timeout_seconds": 120,
+                },
+            }
+        ],
+    )
+
+    events = state.reconcile_state_messages([ai])
+
+    assert len(events) == 1
+    assert "tool_progress" in events[0]
+    data = json.loads(events[0].split("data:", 1)[1])
+    assert data["tool_call_id"] == "sub-1"
+    assert data["args"]["timeout_seconds"] == 120
+    assert "background" not in data["args"]
+    assert data.get("replace_args") is True
+    assert state.args_fallback["sub-1"]["timeout_seconds"] == 120
+    # 同一快照重复到达不重复补发
+    assert state.reconcile_state_messages([ai]) == []
+
+
+def test_tool_completion_keeps_authoritative_args_missing_from_stream():
+    """完成事件整体使用最终参数，不能把流式旧值或多余字段带回来。"""
+    state = agent_stream._ToolStreamState()
+    state.handle_tool_call_chunks(
+        [
+            {
+                "id": "sub-2",
+                "name": "subagent",
+                "index": 0,
+                "args": '{"subagent_type":"general","label":"统计脚本","background":false,"timeout_seconds":60}',
+            }
+        ]
+    )
+    ai = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "id": "sub-2",
+                "name": "subagent",
+                "args": {
+                    "subagent_type": "general",
+                    "label": "统计脚本",
+                    "timeout_seconds": 120,
+                },
+            }
+        ],
+    )
+    state.reconcile_state_messages([ai])
+
+    payload = state.build_tool_message_payload(ToolMessageChunk(content="结果", tool_call_id="sub-2"))
+
+    assert payload["accumulated_args"]["timeout_seconds"] == 120
+    assert payload["accumulated_args"]["label"] == "统计脚本"
+    assert "background" not in payload["accumulated_args"]
+
+
+def test_reconcile_publishes_authoritative_args_after_tool_completed():
+    """ToolMessage 比最终 AIMessage 先到：完成后再用最终参数纠正一次，且不重复。"""
+    state = agent_stream._ToolStreamState()
+    state.handle_tool_call_chunks(
+        [
+            {
+                "id": "sub-3",
+                "name": "subagent",
+                "index": 0,
+                "args": '{"subagent_type":"general","label":"统计脚本","background":false,"timeout_seconds":60}',
+            }
+        ]
+    )
+    payload = state.build_tool_message_payload(ToolMessageChunk(content="结果", tool_call_id="sub-3"))
+    assert payload["accumulated_args"]["timeout_seconds"] == 60
+
+    ai = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "id": "sub-3",
+                "name": "subagent",
+                "args": {
+                    "action": "start",
+                    "subagent_type": "general",
+                    "label": "统计脚本",
+                    "timeout_seconds": 120,
+                },
+            }
+        ],
+    )
+
+    events = state.reconcile_state_messages([ai])
+
+    assert len(events) == 1
+    data = json.loads(events[0].split("data:", 1)[1])
+    assert data["args"]["timeout_seconds"] == 120
+    assert "background" not in data["args"]
+    assert data.get("replace_args") is True
+    assert state.reconcile_state_messages([ai]) == []
+
+
 # --------------------------------------------------------------------------- #
 # _resolve_end_usage / _parse_stream_event
 # --------------------------------------------------------------------------- #
@@ -583,6 +787,34 @@ def _adapter_with(**kwargs) -> agent_stream._AgentSseStreamAdapter:
     for key, value in kwargs.items():
         setattr(adapter, key, value)
     return adapter
+
+
+@pytest.mark.asyncio
+async def test_values_stream_event_reconciles_ghost_tool_cards():
+    """values 快照到达时要把未执行的 running 占位转成 tool_failed 下发。"""
+    adapter = _adapter_with()
+    adapter.tool_stream_state.handle_tool_call_chunks(
+        [
+            {"id": "ghost-1", "name": "write_todos", "index": 0, "args": '{"todos":[]}'},
+        ]
+    )
+    final_ai = AIMessage(
+        content="",
+        tool_calls=[{"id": "real-1", "name": "file_read", "args": {"path": "/a"}}],
+    )
+
+    events = [
+        event
+        async for event in adapter._process_stream_event(
+            ("values", {"messages": [final_ai]}),
+            0.0,
+        )
+    ]
+
+    assert adapter.state_values["messages"] == [final_ai]
+    assert len(events) == 1
+    assert "tool_failed" in events[0]
+    assert "ghost-1" in events[0]
 
 
 def test_resolve_end_usage_prefers_latest_in_memory_payload():
@@ -653,14 +885,31 @@ async def _pending_forever():
 
 @pytest.mark.asyncio
 async def test_heartbeat_lease_lost_without_owner_task_returns_quietly(_fast_heartbeat, monkeypatch):
-    """租约丢失但没有可取消的宿主任务时直接返回（1207->1209）。"""
+    """租约丢失但没有可取消的宿主任务时立即返回，不续约、不重试（1207->1209）。"""
+    heartbeat_calls: list[tuple] = []
+    cancel_calls: list[tuple] = []
+    renew_calls: list[tuple] = []
 
     async def heartbeat_run(run_id, owner_token):
+        heartbeat_calls.append((run_id, owner_token))
         raise AgentRunLeaseLostError("taken over")
 
-    monkeypatch.setattr(agent_stream.agent_inbox_service, "heartbeat_run", heartbeat_run)
+    async def fake_renew(run_id, owner_token):
+        renew_calls.append((run_id, owner_token))
 
-    await agent_stream._heartbeat_agent_run("run-1", None, "tok")
+    monkeypatch.setattr(agent_stream.agent_inbox_service, "heartbeat_run", heartbeat_run)
+    monkeypatch.setattr(agent_stream.agent_run_event_service, "renew_owner", fake_renew)
+    monkeypatch.setattr(
+        agent_stream, "_cancel_agent_owner_task", lambda task, reason: cancel_calls.append((task, reason))
+    )
+
+    # 加超时：实现若回归成「无限重试」会失败而不是把用例挂死
+    result = await asyncio.wait_for(agent_stream._heartbeat_agent_run("run-1", None, "tok"), timeout=2)
+
+    assert result is None
+    assert heartbeat_calls == [("run-1", "tok")]
+    assert cancel_calls == [(None, "agent_run_lease_lost")]
+    assert renew_calls == []
 
 
 @pytest.mark.asyncio
@@ -682,14 +931,30 @@ async def test_heartbeat_lease_lost_cancels_owner_task(_fast_heartbeat, monkeypa
 
 @pytest.mark.asyncio
 async def test_heartbeat_cancelling_status_without_owner_task_returns(_fast_heartbeat, monkeypatch):
-    """状态变为 cancelling 但没有宿主任务时直接返回（1214->1216）。"""
+    """状态变为 cancelling 但没有宿主任务时立即返回，不续约、不重试（1214->1216）。"""
+    heartbeat_calls: list[tuple] = []
+    cancel_calls: list[tuple] = []
+    renew_calls: list[tuple] = []
 
     async def heartbeat_run(run_id, owner_token):
+        heartbeat_calls.append((run_id, owner_token))
         return "cancelling"
 
-    monkeypatch.setattr(agent_stream.agent_inbox_service, "heartbeat_run", heartbeat_run)
+    async def fake_renew(run_id, owner_token):
+        renew_calls.append((run_id, owner_token))
 
-    await agent_stream._heartbeat_agent_run("run-1", None, "tok")
+    monkeypatch.setattr(agent_stream.agent_inbox_service, "heartbeat_run", heartbeat_run)
+    monkeypatch.setattr(agent_stream.agent_run_event_service, "renew_owner", fake_renew)
+    monkeypatch.setattr(
+        agent_stream, "_cancel_agent_owner_task", lambda task, reason: cancel_calls.append((task, reason))
+    )
+
+    result = await asyncio.wait_for(agent_stream._heartbeat_agent_run("run-1", None, "tok"), timeout=2)
+
+    assert result is None
+    assert heartbeat_calls == [("run-1", "tok")]
+    assert cancel_calls == [(None, "agent_run_cancelled")]
+    assert renew_calls == []
 
 
 @pytest.mark.asyncio
@@ -698,6 +963,24 @@ async def test_heartbeat_cancelling_status_cancels_owner_task(_fast_heartbeat, m
 
     async def heartbeat_run(run_id, owner_token):
         return "cancelling"
+
+    monkeypatch.setattr(agent_stream.agent_inbox_service, "heartbeat_run", heartbeat_run)
+
+    owner = asyncio.create_task(_pending_forever())
+    await agent_stream._heartbeat_agent_run("run-1", owner, "tok")
+
+    assert owner.cancelling()
+    with pytest.raises(asyncio.CancelledError):
+        await owner
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_status", ["failed", "cancelled", "interrupted"])
+async def test_heartbeat_terminal_status_cancels_owner_task(_fast_heartbeat, monkeypatch, terminal_status):
+    """Run 已被外部收口时，旧执行 task 必须停止，不能只停续约。"""
+
+    async def heartbeat_run(run_id, owner_token):
+        return terminal_status
 
     monkeypatch.setattr(agent_stream.agent_inbox_service, "heartbeat_run", heartbeat_run)
 
@@ -781,7 +1064,7 @@ async def test_persist_turn_history_uses_checkpoint_writer_when_run_id_present(m
     assert captured["owner_token"] == "tok"
     assert captured["stream_id"] == "stream-9"
     assert captured["turn_id"] == "turn-1"
-    assert captured["operator_name"] == "u1"
+    assert captured["operator_name"] == ""
 
 
 @pytest.mark.asyncio

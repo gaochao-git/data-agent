@@ -113,6 +113,11 @@ async def compress_messages_for_state(
             hard_input_limit_tokens=hard_input_limit_tokens,
         )
 
+    # 只要本轮判定触发压缩就先下发「压缩中」：后续还有「工具结果外置已达标
+    # 跳过摘要」「无可压缩消息组」等提前返回分支，它们同样会产生完成事件。
+    # 若只在真正调用摘要模型前通知，这些路径就只会出现完成卡、没有占位。
+    _notify_compression_started(on_compression_started)
+
     working_messages, referenced_count = _reference_tool_results_to_target(
         original_messages,
         static_input_tokens=static_tokens,
@@ -187,7 +192,6 @@ async def compress_messages_for_state(
             hard_input_limit_tokens=hard_input_limit_tokens,
         )
     _notify_dropped_messages_hook(on_dropped_messages, messages_to_summarize)
-    _notify_compression_started(on_compression_started)
     # 显式 str | None：后续 _run_compression_passes 会把 None 摘要（摘要失败）回填给同一变量
     summary_text: str | None
     summary_text, summary_input_report = await _summarize_for_compression(

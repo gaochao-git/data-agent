@@ -126,9 +126,7 @@ class OntologyActionTypeDao:
             row.object_type_id = int(payload.get("object_type_id") or 0)
             row.parameter_schema_json = json.dumps(payload.get("parameters") or [], ensure_ascii=False)
             row.edit_schema_json = json.dumps(payload.get("edits") or [], ensure_ascii=False)
-            row.submission_criteria_json = json.dumps(
-                payload.get("submission_criteria") or {}, ensure_ascii=False
-            )
+            row.submission_criteria_json = json.dumps(payload.get("submission_criteria") or {}, ensure_ascii=False)
             row.config_version = 1 if is_new_definition else int(row.config_version or 1) + 1
             row.lifecycle_status = payload.get("status") or "draft"
             row.delete_flag = 0

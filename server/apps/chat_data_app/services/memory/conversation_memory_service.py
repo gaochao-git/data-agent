@@ -75,6 +75,10 @@ class MemoryExtraction:
     removals: tuple[str, ...] = ()
 
 
+class MemoryDocumentConflictError(RuntimeError):
+    """用户编辑期间记忆文件已被自动抽取或其他写入更新。"""
+
+
 # 会话级防抖任务表：conversation_id -> 最新调度任务；新调度取消旧任务
 _pending_extraction_tasks: dict[str, asyncio.Task] = {}
 # 立即抽取后台任务的强引用集：防止任务被 GC 静默吞掉
@@ -171,6 +175,47 @@ def merge_memory_items(
                 render_memory_document(merged),
             )
             return merged
+        finally:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+
+
+def replace_memory_document(
+    workspace_root: str,
+    text: str,
+    *,
+    expected_mtime: float,
+    max_bytes: int,
+) -> dict[str, Any]:
+    """用户手工保存记忆文件：与自动抽取共用 flock，按 mtime 做乐观并发校验。
+
+    只允许覆盖已存在的 ``memory/memory.md``。写入沿用记忆服务的 tmp + os.replace，
+    保证自动抽取与人工编辑不会在读写窗口内互相覆盖。
+    """
+    content = str(text or "")
+    byte_count = len(content.encode("utf-8"))
+    if byte_count > max_bytes:
+        raise ValueError(f"文件内容超过大小限制（{max_bytes} 字节）")
+
+    path = memory_file_path(workspace_root)
+    lock_path = memory_lock_path(workspace_root)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "a+", encoding="utf-8") as lock_fd:
+        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+        try:
+            if path.is_symlink():
+                raise ValueError("会话记忆文件不能是符号链接")
+            if not path.is_file():
+                raise FileNotFoundError("会话记忆文件不存在")
+            current_mtime = path.stat().st_mtime
+            if abs(current_mtime - float(expected_mtime)) > 1e-6:
+                raise MemoryDocumentConflictError("会话记忆已被更新，请刷新后重试")
+            _atomic_write_text(path, content)
+            stat = path.stat()
+            return {
+                "path": "/mnt/user-data/memory/memory.md",
+                "bytes": byte_count,
+                "mtime": stat.st_mtime,
+            }
         finally:
             fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
 

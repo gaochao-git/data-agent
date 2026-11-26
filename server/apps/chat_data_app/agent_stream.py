@@ -1,9 +1,7 @@
 """ChatData completion handler."""
 
 import asyncio
-import re
 import time
-from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from contextlib import suppress
 from dataclasses import dataclass
@@ -11,7 +9,6 @@ from functools import partial
 from typing import Any
 from uuid import uuid4
 
-import openai
 from fastapi import Request
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import (
@@ -28,7 +25,7 @@ from utils.tool_call_markup import sanitize_message_payload
 
 from .agent import (
     AgentRunControls,
-    DatasourceContext,
+    BusinessContext,
     IdentityContext,
     ModelInvocationConfig,
     build_unified_system_prompt,
@@ -39,22 +36,38 @@ from .agent import (
 )
 from .agent.context.context_budget import (
     ContextInputLimitExceededError,
-    latest_model_name_from_usage,
     sanitize_context_usage_for_response,
 )
+from .agent.middleware.context_usage import _usage_aux_stats
 from .agent.middleware.steering import SteeringMessageTracker
 from .agent.plugins.loader import refresh_plugin_state
 from .agent.run.agent_inbox_service import AgentRunLeaseLostError, agent_inbox_service
 from .agent.run.agent_run_event_service import agent_run_event_service
 from .agent.run.agent_run_runtime import agent_run_runtime
 from .agent.run.chat_data_stream_request import ChatDataStreamRequest
-from .agent.run.completion_options import parse_completion_run_options, parse_file_selections, parse_quoted_snippets
+from .agent.run.completion_options import (
+    parse_completion_run_options,
+    parse_document_annotations,
+    parse_file_selections,
+    parse_quoted_snippets,
+)
 from .agent.run.conversation_event_service import conversation_event_service
 from .agent.run.conversation_runtime import (
     TurnLifecycleHooks,
     TurnPersistenceHooks,
     TurnResourceOptions,
     stream_agent_turn,
+)
+from .agent.run.run_context import RunSource, build_run_context
+from .agent.run.sse_heartbeat import stream_sse_with_heartbeat
+from .agent.run.user_message_suffixes import (
+    document_annotations_suffix as _document_annotations_suffix,
+)
+from .agent.run.user_message_suffixes import (
+    file_selection_mention_suffix as _file_selection_mention_suffix,
+)
+from .agent.run.user_message_suffixes import (
+    quote_snippets_suffix as _quote_snippets_suffix,
 )
 from .agent.workspace.runtime import is_system_result_workspace_path, resolve_workspace_path
 from .agent.workspace.uploaded_file_parser import get_image_size_limit
@@ -72,6 +85,7 @@ from .agent_run_support import (
     _mark_agent_resume_checkpointed,
     _merge_message_snapshots,
     _offload_oversized_user_input,
+    _persist_agent_failure,
     _persist_agent_model_snapshot,
     _persist_agent_partial_history,
     _persist_agent_turn_history_snapshot,
@@ -91,7 +105,6 @@ from .agent_run_support import (
 )
 
 # 思考流/工具事件/工具参数运行态格式化助手（源模块：agent_stream_events，agent_stream 行数红线拆出）。
-# re-export 保持既有模块属性引用（含测试的 agent_stream._xxx 直接调用）不变。
 from .agent_stream_events import (  # noqa: F401  # 部分为有意重导出，供测试按模块属性引用
     REASONING_TOOL_DISPLAY_NAMES,
     _append_reasoning_segment,
@@ -100,24 +113,44 @@ from .agent_stream_events import (  # noqa: F401  # 部分为有意重导出，�
     _compile_reasoning_tool_name_patterns,
     _extract_reasoning_content,
     _extract_reasoning_from_candidates,
+    _extract_status_error_message,
     _finish_running_tool,
     _format_reasoning_for_display,
     _format_thinking_event,
     _format_tool_event,
     _format_tool_lifecycle_event,
+    _graph_recursion_failure_message,
+    _GraphStepTracker,
+    _is_omlx_prefill_memory_rejected,
     _is_tool_result_error,
+    _model_failure_user_message,
     _parse_tool_args_buffer,
     _register_running_tool,
     _resolve_active_tool_call_id,
     _ToolStreamState,
     _visible_tool_count,
 )
+from .generation_speed import (
+    SPEED_EMIT_INTERVAL_MS as _SPEED_EMIT_INTERVAL_MS,  # noqa: F401  # 测试按模块属性读取
+)
+from .generation_speed import (
+    SPEED_MIN_SPAN_MS as _SPEED_MIN_SPAN_MS,  # noqa: F401  # 测试按模块属性读取
+)
+from .generation_speed import (
+    SPEED_WINDOW_MS as _SPEED_WINDOW_MS,  # noqa: F401  # 测试按模块属性读取
+)
+from .generation_speed import (
+    GenerationSpeedSampler,
+    decode_duration_ms,
+    decode_tokens_per_second,
+    estimate_stream_tokens,
+)
 from .services import conversation_service as conversation
-from .services.agent_run.conversation_workspace import ConversationWorkspaceRuntime
 from .services.agent_run.message_compose import (
     build_file_attachment_text,
     select_vision_attachments,
 )
+from .services.datasource.manager import get_datasource_manager
 from .services.memory.conversation_memory_service import (
     after_agent_turn_with_memory,
     render_session_memory_block,
@@ -130,12 +163,17 @@ from .sse_protocol import (
     SSE_EVENT_GENERATION_SPEED,
     SSE_EVENT_INBOX_ADMITTED,
     SSE_EVENT_MESSAGE,
+    SSE_EVENT_RUN_STEPS,
+    SSE_EVENT_SUBAGENT_CONTEXT_COMPRESSION,
     SSE_EVENT_SUBAGENT_CONTEXT_USAGE,
+    SSE_EVENT_SUBAGENT_GENERATION_SPEED,
     SSE_EVENT_SUBAGENT_MESSAGE,
     SSE_EVENT_SUBAGENT_MESSAGE_DELTA,
+    SSE_EVENT_SUBAGENT_STEPS,
     SSE_EVENT_SUBAGENT_THINKING_DELTA,
     SSE_EVENT_TOKEN_USAGE,
     SSE_EVENT_TOOL,
+    SSE_EVENT_TOOL_ARGS_DELTA,
     SSE_EVENT_TOOL_COMPLETED,
     SSE_EVENT_TOOL_FAILED,
     SSE_EVENT_TOOL_PROGRESS,
@@ -143,7 +181,6 @@ from .sse_protocol import (
 )
 
 # 工具参数流式进度与 SSE 格式化（源模块：tool_stream_progress，agent_stream 行数红线拆出）。
-# re-export 保持既有模块属性引用（含测试）不变。
 from .tool_stream_progress import (
     _count_text_lines,  # noqa: F401  # 测试按模块属性引用 _count_text_lines，属有意重导出
     _extract_streaming_text_field,  # noqa: F401  # 测试按模块属性引用 _extract_streaming_text_field，属有意重导出
@@ -159,106 +196,13 @@ class AgentRunStreamFailedError(RuntimeError):
     """SSE 已发送用户可见错误，外层只需按失败状态收口 Run。"""
 
 
-def _is_omlx_prefill_memory_rejected(exc: Exception) -> bool:
-    """识别 oMLX 内存护栏拒绝（prefill_memory_exceeded）。
-
-    openai SDK 已把 400 响应体解析进 ``APIStatusError.body``，按结构取 code；
-    body 缺失或形状变化时按 message 关键字兜底。命中时重试无效——上下文
-    体量不变则服务端仍会拒绝。
-    """
-    body = getattr(exc, "body", None)
-    if isinstance(body, dict):
-        error = body.get("error")
-        payload = error if isinstance(error, dict) else body
-        code = str(payload.get("omlx_code") or payload.get("code") or "")
-        if code == "prefill_memory_exceeded":
-            return True
-    return "prefill_memory_exceeded" in str(exc)
-
-
-def _extract_status_error_message(exc: Exception) -> str | None:
-    """从 APIStatusError 提取服务商 message 文本用于用户透出。
-
-    只取 body.error.message（body 为字符串时取原文），剥离 request_id 噪音；
-    空值或超长（>200 字符，防服务商透出大段内部诊断）返回 None，由调用方走
-    兜底文案。永不透出堆栈与响应原文全文。
-    """
-    body = getattr(exc, "body", None)
-    if isinstance(body, dict):
-        error = body.get("error")
-        payload = error if isinstance(error, dict) else body
-        message = str(payload.get("message") or "").strip()
-    elif isinstance(body, str):
-        message = body.strip()
-    else:
-        return None
-    message = re.sub(r"\s*\(request_id[:：][^)]*\)", "", message, flags=re.IGNORECASE).strip()
-    return message if 0 < len(message) <= 200 else None
-
-
-def _model_failure_user_message(exc: Exception) -> str:
-    """将模型服务异常映射为用户可读文案；不向用户透出原始错误细节。"""
-    if isinstance(exc, openai.APITimeoutError):
-        return "模型服务响应超时，请点击继续重试。"
-    if isinstance(exc, openai.AuthenticationError):
-        return "模型服务认证失败，请检查模型服务 API Key 配置后重试。"
-    if isinstance(exc, openai.RateLimitError):
-        return "模型服务当前繁忙，请稍后点击继续重试，或更换其他模型。"
-    if isinstance(exc, openai.APIConnectionError):
-        return "模型服务连接中断，请点击继续重试。"
-    if isinstance(exc, TimeoutError):
-        # 含 langchain-openai StreamChunkTimeoutError（其为内置 TimeoutError 子类）：
-        # TCP 连接存活但长时间无任何流式内容返回（模型服务挂起/过载），由分块超时看门狗主动中断
-        return "模型服务长时间未返回内容，请点击继续重试，或稍后再试。"
-    if _is_omlx_prefill_memory_rejected(exc):
-        # oMLX 内存护栏拒绝的 400：上下文体量超服务端推理内存上限，重试无效，
-        # 引导用户缩减上下文而不是反复点击重试
-        return "本轮对话上下文超出模型服务的内存上限，请新开会话，或减少本条消息引用的文件后重试。"
-    if isinstance(exc, openai.APIStatusError):
-        # 非枚举状态码（402 余额不足、403 配额、404 模型下线、5xx 网关错等）：
-        # 透出服务商 message（提取+护栏），取不到时走兜底。具体子类
-        # （超时/认证/限流）已在上方命中，不会进入本分支。
-        detail = _extract_status_error_message(exc)
-        if detail:
-            return f"模型服务返回错误：{detail}"
-    return "智能问数执行失败，请稍后重试。"
-
-
-def _file_selection_mention_suffix(file_selections: list[str]) -> str:
-    """用户在输入框 @ 引用工作区文件时，给 Human 消息追加模型可见的引用短句。
-
-    前端 @ 菜单数据源是会话工作区（uploads/outputs/workspace）文件树，chip 随
-    消息传 file_selections（相对路径列表）；引用的感知完全靠这行短句，模型从
-    对话即可看到本轮用户点名了哪些文件。未引用时不追加任何内容。
-    """
-    if not file_selections:
-        return ""
-    references = "、".join(f"{USER_DATA_VIRTUAL_ROOT}/{path}" for path in file_selections)
-    return f"\n\n[引用文件：{references}]"
-
-
-def _quote_snippets_suffix(quoted_snippets: list[dict[str, str]] | None) -> str:
-    """划选引用的模型可见后缀：片段原文按标记块逐一包住，追加在正文之后。
-
-    前端划选助手回复片段后随消息传 quoted_snippets（[{"text": ...}]），
-    语义等同 IM 引用回复——模型能看到被引用的原文与「继续问答」意图。
-    开始/结束标记成对出现，前端气泡展示时按同一标记剥离（引用原文以
-    additional_kwargs 的结构化字段渲染 chip，不在正文重复平铺）。
-    """
-    blocks = [str(item.get("text") or "").strip() for item in (quoted_snippets or [])]
-    blocks = [block for block in blocks if block]
-    if not blocks:
-        return ""
-    lines = "\n\n".join(f"[引用助手回复片段开始]\n{block}\n[引用助手回复片段结束]" for block in blocks)
-    return f"\n\n{lines}"
-
-
 def _build_user_message(
     content: str | list[str | dict[str, Any]],
     file_selections: list[str] | None = None,
     *,
     message_id: str | None = None,
     quoted_snippets: list[dict[str, str]] | None = None,
+    annotations: list[dict[str, Any]] | None = None,
     **extra_kwargs: Any,
 ) -> HumanMessage:
     """构造带服务端时间戳和前端选择留痕的用户消息。
@@ -271,8 +215,12 @@ def _build_user_message(
     """
     mention_suffix = _file_selection_mention_suffix(file_selections or [])
     quote_suffix = _quote_snippets_suffix(quoted_snippets)
+    annotation_suffix = _document_annotations_suffix(
+        annotations,
+        user_content=content if isinstance(content, str) else "",
+    )
     if isinstance(content, str):
-        content = f"{content}{mention_suffix}{quote_suffix}"
+        content = f"{content}{mention_suffix}{quote_suffix}{annotation_suffix}"
     reasoning_turn_id = message_id or str(uuid4())
     additional_kwargs: dict[str, Any] = {
         "timestamp": _get_timestamp(),
@@ -282,6 +230,8 @@ def _build_user_message(
         additional_kwargs["file_selections"] = list(file_selections)
     if quoted_snippets:
         additional_kwargs["quoted_snippets"] = [dict(item) for item in quoted_snippets]
+    if annotations:
+        additional_kwargs["annotations"] = [dict(item) for item in annotations]
     additional_kwargs.update({key: value for key, value in extra_kwargs.items() if value})
     return HumanMessage(id=reasoning_turn_id, content=content, additional_kwargs=additional_kwargs)
 
@@ -399,14 +349,21 @@ def _generation_stats_from_usage(
         return None
     ended_wall_ms = int(stream_ended_wall_ms or time.time() * 1000)
     tool_duration_ms = _tool_duration_in_window((usage or {}).get("breakdown"), first_token_wall_ms, ended_wall_ms)
-    duration_ms = (ended_wall_ms - first_token_wall_ms) - tool_duration_ms
-    if duration_ms <= 0:
+    duration_ms = decode_duration_ms(
+        first_token_wall_ms=first_token_wall_ms,
+        stream_ended_wall_ms=ended_wall_ms,
+        tool_duration_ms=tool_duration_ms,
+    )
+    if duration_ms is None:
+        return None
+    tokens_per_second = decode_tokens_per_second(output_tokens=output_tokens, duration_ms=duration_ms)
+    if tokens_per_second is None:
         return None
     stats = {
         "first_token_ms": first_token_ms,
         "duration_ms": duration_ms,
         "output_tokens": output_tokens,
-        "tokens_per_second": round(output_tokens / (duration_ms / 1000)),
+        "tokens_per_second": tokens_per_second,
     }
     # 模型侧首 token：覆盖首 token 的那次调用起点 → 首 token 的等待（首 token 不
     # 落在任何调用窗口内则省略，不硬凑）。
@@ -417,65 +374,16 @@ def _generation_stats_from_usage(
     return stats
 
 
-def _usage_aux_stats(usage: Any | None, *, model_name: str | None = None) -> dict[str, Any]:
-    """从 usage 提取辅助统计字段：输入总 token、缓存命中与模型名；缺失时省略不硬凑。
-
-    model_name：adapter 在 sanitize 前从 llm_calls 提取的最后一次调用模型名，
-    显式传入优先——收口时的 usage 可能已被 sanitize（llm_calls 剥离）。
-    缓存命中：cumulative_cached_input_tokens / cumulative_cache_hit_rate 由
-    context_usage 侧按模型实际上报聚合（未上报缓存信息的模型不产出，与
-    ConversationTokenUsage 面板的「模型缓存」累计口径同源）。
-    """
-    if not isinstance(usage, dict):
-        return {}
-    aux: dict[str, Any] = {}
-    # 输入总 token：本轮全部模型调用的输入累计。
-    input_tokens = int(usage.get("cumulative_input_tokens") or usage.get("input_tokens") or 0)
-    if input_tokens > 0:
-        aux["input_tokens"] = input_tokens
-    # 缓存命中：本轮全部模型调用的缓存输入累计（命中率随行，仅在输入可报时存在）。
-    cached_input_tokens = int(usage.get("cumulative_cached_input_tokens") or 0)
-    if cached_input_tokens > 0:
-        aux["cached_input_tokens"] = cached_input_tokens
-        cache_hit_rate = usage.get("cumulative_cache_hit_rate")
-        if isinstance(cache_hit_rate, (int, float)) and cache_hit_rate > 0:
-            aux["cache_hit_rate"] = round(float(cache_hit_rate), 1)
-    # 模型名：多工具来回时以最终回复的调用为准。
-    resolved_model_name = model_name or latest_model_name_from_usage(usage)
-    if resolved_model_name:
-        aux["model"] = resolved_model_name
-    return aux
-
-
-# 实时生成速率（generation_speed SSE）：滑窗口径的「当前速率」，与收口的整体平均
-# （generation_stats）是两个指标。滑窗 = 最近 N 毫秒内流出的模型输出粗估 token ÷
-# 活跃跨度；窗口静默（工具执行、调用间隙）不推送，前端保持上次值自然冻结。
-_SPEED_WINDOW_MS = 2000
-_SPEED_EMIT_INTERVAL_MS = 500
-_SPEED_MIN_SPAN_MS = 300
-# 与前端 estimateTokensFromText 同口径：CJK 字符 1 token/字，其余非空白 4 字符/token
-_SPEED_CJK_CHAR_REGEX = re.compile(r"[\u3400-\u9fff\uf900-\ufaff\u3000-\u303f\uff01-\uff5e]")
-
-
 def _estimate_stream_tokens(text: str) -> int:
-    """流式文本的 token 粗估（与前端实时估算同公式），仅用于生成中的实时速率展示。"""
-    cjk_count = 0
-    other_count = 0
-    for char in text:
-        if char.isspace():
-            continue
-        if _SPEED_CJK_CHAR_REGEX.match(char):
-            cjk_count += 1
-        else:
-            other_count += 1
-    return cjk_count + (other_count + 3) // 4
+    """兼容旧调用点：实时速率 token 粗估统一走 generation_speed。"""
+    return estimate_stream_tokens(text)
 
 
 def _validate_workspace_file_selections(file_selections: list[str], workspace_root: str) -> list[str]:
     """校验 @ 引用文件：必须落在当前会话工作区白名单目录内且真实存在。
 
     白名单校验复用 WORKSPACE_PATH_POLICY（拒越界/裸别名），系统结果区
-    （outputs/query_result、outputs/.tool-offload）不可引用；不存在的文件
+    （workspace/.system/query_result、workspace/.system/tool-offload）不可引用；不存在的文件
     （@ 后被删除）丢弃。无效条目记日志后跳过，不阻断本轮。
     """
     if not file_selections:
@@ -501,12 +409,16 @@ def _validate_workspace_file_selections(file_selections: list[str], workspace_ro
 # event_type（属不信任输入），未知类型记 WARNING 后丢弃，不参与帧名派生。
 _SUBAGENT_TOOL_EVENT_TYPES = {
     SSE_EVENT_TOOL_STARTED,
+    SSE_EVENT_TOOL_ARGS_DELTA,
     SSE_EVENT_TOOL_COMPLETED,
     SSE_EVENT_TOOL_FAILED,
     SSE_EVENT_SUBAGENT_MESSAGE,
     SSE_EVENT_SUBAGENT_MESSAGE_DELTA,
     SSE_EVENT_SUBAGENT_THINKING_DELTA,
+    SSE_EVENT_SUBAGENT_GENERATION_SPEED,
+    SSE_EVENT_SUBAGENT_STEPS,
     SSE_EVENT_SUBAGENT_CONTEXT_USAGE,
+    SSE_EVENT_SUBAGENT_CONTEXT_COMPRESSION,
 }
 
 
@@ -579,13 +491,16 @@ class _AgentSseStreamAdapter:
         on_first_message: Callable[[], None] | None = None,
         on_stream_started: Callable[[], Awaitable[None]] | None = None,
         debug_label: str | None = None,
-        user_id: str | None = None,
+        run_context: dict[str, Any] | None = None,
         reasoning_turn_id: str | None = None,
         duration_relay: _DurationRelayHooks | None = None,
     ) -> None:
         self.agent = agent
         self.initial_state = initial_state
         self.config = config
+        self.run_context = run_context or {}
+        self._graph_step_tracker = _GraphStepTracker()
+        self._stream_config = self._graph_step_tracker.wrap_config(config)
         self.request = request
         self.visible_message_filter = visible_message_filter
         log = disconnect_log or _DisconnectLog()
@@ -595,7 +510,7 @@ class _AgentSseStreamAdapter:
         self.on_first_message = on_first_message
         self.on_stream_started = on_stream_started
         self.debug_label = debug_label
-        self.user_id = user_id
+        self.user_id = str(self.run_context.get("user_id") or "").strip() or None
         self.reasoning_turn_id = reasoning_turn_id
         self.tool_stream_state = _ToolStreamState()
         self.reasoning_segments: list[dict[str, Any]] = []
@@ -625,10 +540,23 @@ class _AgentSseStreamAdapter:
         self._resolve_inherited_duration = relay.resolve_inherited_duration
         self._on_interrupt_finalize = relay.on_interrupt_finalize
         self._inherited_durations: dict[str, int] | None = None
-        # 实时生成速率（generation_speed）：滑窗 token 样本 (墙钟ms, 粗估token)，
-        # 仅本轮流内有效；节流推送，窗口静默不推送。
-        self._speed_samples: deque[tuple[int, int]] = deque()
-        self._last_speed_emit_ms = 0
+        # 实时生成速率（generation_speed）：主对话与子智能体共用同一滑窗实现。
+        self._speed_sampler = GenerationSpeedSampler()
+        # 本轮 run 的 LangGraph 真实引擎步数（由节点回调 metadata.langgraph_step 提取）。
+        self.supersteps = 0
+
+    @property
+    def _speed_samples(self) -> Any:
+        """兼容旧测试/调试读取：滑窗样本直接指向共用采样器。"""
+        return self._speed_sampler.samples
+
+    @property
+    def _last_speed_emit_ms(self) -> int:
+        return self._speed_sampler.last_emit_ms
+
+    @_last_speed_emit_ms.setter
+    def _last_speed_emit_ms(self, value: int) -> None:
+        self._speed_sampler.last_emit_ms = int(value)
 
     def set_input_state(self, input_state: dict[str, Any]) -> None:
         """设置下一次 graph 调用的增量输入。"""
@@ -649,7 +577,15 @@ class _AgentSseStreamAdapter:
         try:
             async for sse_event in self._iter_agent_stream_events(started_at):
                 yield sse_event
+            for step_event in self._sync_graph_steps():
+                yield step_event
         except Exception as exc:
+            for step_event in self._sync_graph_steps():
+                yield step_event
+            # 异常收口：窗口内未发出的参数尾片也要补发，否则上游断开时已生成的
+            # 部分会在前端凭空缺一段（与正常收口口径不一致）。
+            for preview_event in self.tool_stream_state.flush_pending_previews():
+                yield preview_event
             if not self._first_visible_payload_seen:
                 self._emit_first_token_timeout_if_needed(
                     started_at, ext2={"error_type": exc.__class__.__name__, "error": str(exc)}
@@ -673,7 +609,8 @@ class _AgentSseStreamAdapter:
         stream_started = False
         async for event in self.agent.astream(
             self.initial_state,
-            config=self.config,
+            config=self._stream_config,
+            context=self.run_context,
             stream_mode=["messages", "custom", "values"],
         ):
             if not stream_started:
@@ -683,12 +620,16 @@ class _AgentSseStreamAdapter:
                 return
             async for sse_event in self._process_stream_event(event, started_at):
                 yield sse_event
+            for step_event in self._sync_graph_steps():
+                yield step_event
 
     async def _process_stream_event(self, event: Any, started_at: float) -> AsyncIterator[dict[str, Any] | str]:
         event_kind, payload = parse_agent_stream_event(event)
         if event_kind == "values":
             if isinstance(payload, dict):
                 self.state_values = payload
+                for sse_event in self.tool_stream_state.reconcile_state_messages(payload.get("messages")):
+                    yield sse_event
             return
         if event_kind == "custom":
             for sse_event in self._handle_custom_payload(payload):
@@ -722,6 +663,19 @@ class _AgentSseStreamAdapter:
         speed_event = self._maybe_emit_generation_speed()
         if speed_event:
             yield speed_event
+
+    def _sync_graph_steps(self) -> Iterator[str]:
+        """把回调捕获的真实引擎步数转成 run_steps；同一值只发一次。"""
+        if self._graph_step_tracker.supersteps <= self.supersteps:
+            return
+        self.supersteps = self._graph_step_tracker.supersteps
+        limit = self._recursion_limit()
+        data = {"supersteps": self.supersteps, **({"recursion_limit": limit} if limit is not None else {})}
+        yield _format_sse(SSE_EVENT_RUN_STEPS, data)
+
+    def _recursion_limit(self) -> int | None:
+        raw = self.config.get("recursion_limit") if isinstance(self.config, dict) else None
+        return raw if isinstance(raw, int) and raw > 0 else None
 
     def _stream_state_has_pending_tool_call(self) -> bool:
         """最后一条是带 tool_calls 的 AI 消息时，可能正在 interrupt，必须回读 checkpoint。"""
@@ -758,6 +712,11 @@ class _AgentSseStreamAdapter:
         if durations:
             stats = dict(stats or {})
             stats.update(durations)
+        # 本轮图推进次数与额度：与 token 统计相互独立，usage 缺失时同样随消息持久化。
+        if self.supersteps > 0:
+            stats = dict(stats or {}, supersteps=self.supersteps)
+            if (limit := self._recursion_limit()) is not None:
+                stats["recursion_limit"] = limit
         if persist_latest_ai_timestamp:
             self.state = await _persist_latest_ai_message_timestamp(
                 self.agent,
@@ -1021,28 +980,13 @@ class _AgentSseStreamAdapter:
 
     def _sample_generation_speed(self, text: str) -> None:
         """把一段流式模型输出按 token 粗估记入滑窗样本（墙钟毫秒戳）。"""
-        tokens = _estimate_stream_tokens(text)
-        if tokens > 0:
-            self._speed_samples.append((int(time.time() * 1000), tokens))
+        self._speed_sampler.observe(text, now_ms=int(time.time() * 1000))
 
     def _maybe_emit_generation_speed(self) -> str | None:
         """节流推送实时生成速率（generation_speed）；窗口静默返回 None，前端保持上次值。"""
         now_ms = int(time.time() * 1000)
-        if now_ms - self._last_speed_emit_ms < _SPEED_EMIT_INTERVAL_MS:
-            return None
-        window_start_ms = now_ms - _SPEED_WINDOW_MS
-        while self._speed_samples and self._speed_samples[0][0] <= window_start_ms:
-            self._speed_samples.popleft()
-        if not self._speed_samples:
-            return None
-        window_tokens = sum(tokens for _, tokens in self._speed_samples)
-        earliest_ms = min(timestamp for timestamp, _ in self._speed_samples)
-        span_ms = max(now_ms - earliest_ms, _SPEED_MIN_SPAN_MS)
-        self._last_speed_emit_ms = now_ms
-        return _format_sse(
-            SSE_EVENT_GENERATION_SPEED,
-            {"tokens_per_second": round(window_tokens / (span_ms / 1000), 1), "window_ms": _SPEED_WINDOW_MS},
-        )
+        payload = self._speed_sampler.maybe_snapshot(now_ms=now_ms)
+        return _format_sse(SSE_EVENT_GENERATION_SPEED, payload) if payload else None
 
     def _resolve_end_usage(self, prefer_latest_usage: bool) -> Any | None:
         state_usage = None
@@ -1082,12 +1026,12 @@ async def _generate_chat_data_stream(
     datasource_id = req.datasource_id
     user_id = req.user_id
     username = req.username
-    member_datasource_ids = req.member_datasource_ids
     semantic_config_id = req.semantic_config_id
     request = req.request
     model_id = req.model_id
     file_selections = req.file_selections
     quoted_snippets = req.quoted_snippets
+    annotations = req.annotations
     enable_thinking = req.enable_thinking
     thinking_effort = req.thinking_effort
     skill_names = req.skill_names
@@ -1138,12 +1082,12 @@ async def _generate_chat_data_stream(
                 datasource_id=datasource_id,
                 user_id=user_id,
                 username=username,
-                member_datasource_ids=member_datasource_ids,
                 semantic_config_id=semantic_config_id,
                 request=request,
                 model_id=model_id,
                 file_selections=file_selections,
                 quoted_snippets=quoted_snippets,
+                annotations=annotations,
                 enable_thinking=enable_thinking,
                 thinking_effort=thinking_effort,
                 skill_names=normalized_skill_names,
@@ -1200,8 +1144,6 @@ async def _heartbeat_agent_run(
 ) -> None:
     """保持运行租约；停止请求落到其他 worker 时协作取消本地执行。"""
     while True:
-        # 租约 120s，5s 心跳已足够及时感知跨 worker 的取消/接管，
-        # 同时把满载时的 inbox UPDATE 频率控制在个位数 QPS。
         await asyncio.sleep(5)
         try:
             heartbeat_status = await agent_inbox_service.heartbeat_run(run_id, owner_token)
@@ -1213,14 +1155,17 @@ async def _heartbeat_agent_run(
         except Exception:
             logger.warning("ChatData Agent Run 心跳续约失败，下一周期重试: run_id=%s", run_id, exc_info=True)
             continue
-        if heartbeat_status == "cancelling":
-            _cancel_agent_owner_task(owner_task, "agent_run_cancelled")
+        cancel_reason = {
+            "cancelling": "agent_run_cancelled",
+            "interrupting": "agent_run_interrupting",
+            "failed": "agent_run_terminal",
+            "cancelled": "agent_run_terminal",
+            "interrupted": "agent_run_terminal",
+        }.get(heartbeat_status)
+        if cancel_reason:
+            _cancel_agent_owner_task(owner_task, cancel_reason)
             return
         if heartbeat_status != "active":
-            # waiting_user/finished are normal transitions performed by this
-            # execution. Stop renewing without cancelling the stream, which
-            # still needs to publish question_requested/done. A true takeover
-            # keeps status active and fails the owner-token assertion above.
             return
 
 
@@ -1251,11 +1196,11 @@ def _create_agent_stream_adapter(
         agent=agent,
         initial_state=initial_state,
         config=config,
+        run_context={"user_id": callbacks.user_id, "operator_name": callbacks.username or ""},
         request=request,
         visible_message_filter=_is_chat_data_visible_stream_message,
         disconnect_log=_DisconnectLog(id=callbacks.thread_id),
         debug_label="AI Content from model",
-        user_id=callbacks.user_id,
         include_empty_tool_messages=True,
         on_first_message=partial(callbacks.log_phase, "first_model_chunk"),
         on_stream_started=on_stream_started,
@@ -1295,7 +1240,8 @@ async def _resolve_inbox_message_references(
     selections = kwargs.get("file_selections") or []
     file_ids = kwargs.get("file_ids") or []
     quoted_snippets = parse_quoted_snippets(kwargs.get("quoted_snippets"))
-    if not selections and not file_ids and not quoted_snippets:
+    annotations = parse_document_annotations(kwargs.get("annotations"))
+    if not selections and not file_ids and not quoted_snippets and not annotations:
         return message
     valid_selections = _validate_workspace_file_selections(selections, workspace_root) if selections else []
     file_attachments = (
@@ -1313,14 +1259,22 @@ async def _resolve_inbox_message_references(
     if quoted_snippets:
         # 片段为纯文本，无外部资源可校验；重解析去重截断后留痕，供事件表持久化
         new_kwargs["quoted_snippets"] = quoted_snippets
+    if annotations:
+        # 标注同样在入参边界收敛一次，排队消息与首条消息走同一份解析口径
+        new_kwargs["annotations"] = annotations
     _, max_image_size = await get_image_size_limit()
     vision_attachments = select_vision_attachments(file_attachments, max_image_size=max_image_size)
     if vision_attachments:
         new_kwargs["vision_attachments"] = vision_attachments
+    annotation_suffix = _document_annotations_suffix(
+        annotations,
+        user_content=message.content if isinstance(message.content, str) else "",
+    )
     new_content = (
         f"{message.content}"
         f"{_file_selection_mention_suffix(valid_selections)}"
         f"{_quote_snippets_suffix(quoted_snippets)}"
+        f"{annotation_suffix}"
         f"{build_file_attachment_text(file_attachments)}"
     )
     return message.model_copy(update={"content": new_content, "additional_kwargs": new_kwargs})
@@ -1332,10 +1286,12 @@ async def _persist_admitted_inbox_messages(
 ) -> None:
     """把已解析的排队消息持久化为 admitted 用户历史（上屏与回放的依据）。"""
     for message in messages:
+        if (getattr(message, "additional_kwargs", None) or {}).get("hide_from_ui"):
+            continue
         await conversation_event_service.persist_user_message(
             conversation_id=callbacks.thread_id,
             user_id=callbacks.user_id or "system",
-            operator_name=callbacks.username or callbacks.user_id or "system",
+            operator_name=callbacks.username or "",
             message=message,
         )
 
@@ -1374,7 +1330,7 @@ async def _mark_agent_waiting_for_user(
         callbacks.run_id,
         question,
         callbacks.user_id or "system",
-        callbacks.username or callbacks.user_id or "system",
+        callbacks.username or "",
         callbacks.owner_token,
     )
 
@@ -1395,31 +1351,11 @@ async def _before_agent_stream(callbacks: _AgentRunStreamCallbacks) -> bool:
             await agent_inbox_service.restore_question_answer(
                 callbacks.run_id,
                 callbacks.user_id or "system",
-                callbacks.username or callbacks.user_id or "system",
+                callbacks.username or "",
                 callbacks.owner_token,
             )
         return False
     return True
-
-
-async def _prepare_agent_prompt_bundle(
-    semantic_materialize_note: str,
-    user_id: str | None,
-    thread_id: str,
-    workspace_runtime: ConversationWorkspaceRuntime,
-) -> tuple[Any, str]:
-    """构建数据上下文与会话技能提示词清单。
-
-    静态注入下线后，数据上下文区唯一有效字段是物化说明；恒传 dict 以兼容
-    build_unified_system_prompt 的既有口径（无说明时为空 dict → 空文本）。
-    """
-    data_context: Any = {"semantic_materialize_note": semantic_materialize_note} if semantic_materialize_note else {}
-    available_skills_xml = await _load_runtime_skills_xml(
-        user_id or "system",
-        thread_id,
-        workspace_runtime,
-    )
-    return data_context, available_skills_xml
 
 
 @dataclass(frozen=True)
@@ -1432,6 +1368,7 @@ class TurnUserInput:
     vision_attachments: list[str]
     skill_names: list[str]
     quoted_snippets: list[dict[str, str]]
+    annotations: list[dict[str, Any]] | None = None
     adopted_messages: list[HumanMessage] | None = None
 
 
@@ -1479,13 +1416,11 @@ async def _resolve_agent_turn_inputs(
     vision_attachments = user_input.vision_attachments
     skill_names = user_input.skill_names
     quoted_snippets = user_input.quoted_snippets
+    annotations = user_input.annotations
     adopted_messages = user_input.adopted_messages
     resume_answer = resume.resume_answer
     turn_id = resume.turn_id
-    user_id = runtime.user_id
-    username = runtime.username
     thread_id = runtime.thread_id
-    datasource_id = runtime.datasource_id
     semantic_context = runtime.semantic_context
     runtime_options = runtime.runtime_options
     workspace_root = runtime.workspace_root
@@ -1506,16 +1441,14 @@ async def _resolve_agent_turn_inputs(
             message_id=turn_id,
             vision_attachments=vision_attachments,
             quoted_snippets=quoted_snippets,
+            annotations=annotations,
             **message_kwargs,
         )
     initial_state = _resolve_agent_initial_state(
         resume_answer=resume_answer,
-        user_id=user_id,
-        operator_name=username,
         conversation_id=thread_id,
         adopted_messages=adopted_messages,
         user_message=user_message,
-        datasource_id=datasource_id,
         semantic_context=semantic_context,
         runtime_options=runtime_options,
         workspace_root=workspace_root,
@@ -1543,14 +1476,13 @@ async def _admit_adopted_messages(
     if adopted_messages:
         adopted_ids = [str(message.id or "") for message in adopted_messages]
         steering_tracker.record(adopted_ids)
-        stream_adapter.queue_event(
-            _format_sse(
-                SSE_EVENT_INBOX_ADMITTED,
-                {
-                    "message_ids": adopted_ids,
-                },
-            )
-        )
+        visible_ids = [
+            message_id
+            for message_id, message in zip(adopted_ids, adopted_messages, strict=False)
+            if not (getattr(message, "additional_kwargs", None) or {}).get("hide_from_ui")
+        ]
+        if visible_ids:
+            stream_adapter.queue_event(_format_sse(SSE_EVENT_INBOX_ADMITTED, {"message_ids": visible_ids}))
 
 
 async def _run_chat_data_agent_stream(
@@ -1565,12 +1497,12 @@ async def _run_chat_data_agent_stream(
     datasource_id = req.datasource_id
     user_id = req.user_id
     username = req.username
-    member_datasource_ids = req.member_datasource_ids
     semantic_config_id = req.semantic_config_id
     request = req.request
     model_id = req.model_id
     file_selections = req.file_selections
     quoted_snippets = parse_quoted_snippets(req.quoted_snippets)
+    annotations = parse_document_annotations(req.annotations)
     enable_thinking = req.enable_thinking
     thinking_effort = req.thinking_effort
     skill_names = req.skill_names
@@ -1586,6 +1518,7 @@ async def _run_chat_data_agent_stream(
     # 无人值守运行（定时轮派发）：工具装配剔除 ask_user_question
     disable_user_interaction = req.disable_user_interaction
     selected_files = parse_file_selections(file_selections)
+    callbacks: _AgentRunStreamCallbacks | None = None
     try:
         # 无依赖的准备项一次并行：语义上下文（含数据源校验）/ 子智能体热默认 /
         # 会话创建日期 / 附件解析。语义上下文失败仍按 _AgentRunPreparationError
@@ -1593,11 +1526,8 @@ async def _run_chat_data_agent_stream(
         semantic_context, hot_defaults, created_date, file_attachments = await asyncio.gather(
             _prepare_agent_semantic_context(
                 thread_id=thread_id,
-                user_query=user_query,
                 datasource_id=datasource_id,
                 user_id=user_id,
-                username=username,
-                member_datasource_ids=member_datasource_ids,
                 semantic_config_id=semantic_config_id,
             ),
             get_subagent_hot_defaults(),
@@ -1615,13 +1545,14 @@ async def _run_chat_data_agent_stream(
             thread_id=thread_id,
             datasource_id=datasource_id,
             user_id=user_id,
+            username=username,
             semantic_context=semantic_context,
             runtime_options=runtime_options,
             created_date=created_date,
         )
         log_phase("workspace_runtime")
     except _AgentRunPreparationError as exc:
-        yield _format_sse(SSE_EVENT_ERROR, {"error": exc.message})
+        yield await _persist_agent_failure(req, None, exc, exc.message)
         raise AgentRunStreamFailedError from None
     # 引用文件校验必须在 workspace 就绪之后：@ 菜单可引用的文件以工作区实际内容为准。
     valid_file_selections = _validate_workspace_file_selections(selected_files, workspace_paths["root"])
@@ -1637,9 +1568,13 @@ async def _run_chat_data_agent_stream(
                 thread_id=thread_id,
             )
 
-    data_context, available_skills_xml = await _prepare_agent_prompt_bundle(
-        semantic_materialize_note,
-        user_id,
+    # 数据上下文区承载物化说明与数据源组智能问数说明（2026-11-10 恢复注入）；
+    # 恒传 dict 兼容 build_unified_system_prompt 的既有口径（无内容时空 dict → 空文本）。
+    data_context: Any = {"semantic_materialize_note": semantic_materialize_note} if semantic_materialize_note else {}
+    if query_context := await get_datasource_manager().get_query_context(datasource_id):
+        data_context["query_context"] = query_context
+    available_skills_xml = await _load_runtime_skills_xml(
+        user_id or "system",
         thread_id,
         workspace_runtime,
     )
@@ -1693,6 +1628,7 @@ async def _run_chat_data_agent_stream(
                         vision_attachments=vision_attachments,
                         skill_names=skill_names or [],
                         quoted_snippets=quoted_snippets,
+                        annotations=annotations,
                         adopted_messages=adopted_messages,
                     ),
                     resume=TurnResumeContext(
@@ -1730,6 +1666,7 @@ async def _run_chat_data_agent_stream(
                 stream_event_id_provider=stream_event_id_provider,
                 log_phase=log_phase,
                 steering_tracker=steering_tracker,
+                model_id=model_id,
                 workspace_root=workspace_paths["root"],
                 adopted_messages=adopted_messages,
                 user_message=user_message,
@@ -1748,9 +1685,11 @@ async def _run_chat_data_agent_stream(
                     user_id=user_id,
                     operator_name=username,
                 ),
-                datasource_context=DatasourceContext(
-                    datasource_id=datasource_id,
-                    source_type=str((semantic_context.datasource_meta or {}).get("source_type") or ""),
+                business_context=BusinessContext(
+                    values={
+                        "datasource_id": datasource_id,
+                        "source_type": str((semantic_context.datasource_meta or {}).get("source_type") or ""),
+                    }
                 ),
                 model_invocation=ModelInvocationConfig(
                     system_prompt=system_prompt,
@@ -1822,11 +1761,11 @@ async def _run_chat_data_agent_stream(
 
     except ContextInputLimitExceededError as exc:
         logger.info("智能问数上下文超出输入容量: conversation_id=%s", thread_id)
-        yield _format_sse(SSE_EVENT_ERROR, {"error": str(exc)})
+        yield await _persist_agent_failure(req, callbacks, exc, str(exc))
         raise AgentRunStreamFailedError from None
     except Exception as exc:
         logger.error("智能问数执行失败: conversation_id=%s", thread_id, exc_info=True)
-        yield _format_sse(SSE_EVENT_ERROR, {"error": _model_failure_user_message(exc)})
+        yield await _persist_agent_failure(req, callbacks, exc, _model_failure_user_message(exc))
         raise AgentRunStreamFailedError from None
 
 
@@ -1876,37 +1815,27 @@ async def sql_completion_handler(
 
     # 保持懒创建会话；数据源组在生成流开始时写入业务会话表并校验。
     await conversation.get_or_create_conversation(AGENT_ID, conversation_id, user_id)
-    runtime_context = {
+    runtime_context = build_run_context(
+        source=RunSource.USER,
+        run_options=run_options,
         # 明确执行队列消息时，模型输入来自 adopted_messages，不能再把
         # completion 的展示文本作为第二条当前用户消息注入。
-        "query": "" if queued_message_id else query,
-        "datasource_id": run_options.datasource_id,
-        "member_datasource_ids": run_options.member_datasource_ids,
-        "semantic_config_id": run_options.semantic_config_id,
-        "model_id": run_options.model_id,
-        "file_selections": run_options.file_selections,
-        "quoted_snippets": run_options.quoted_snippets,
-        "enable_thinking": run_options.enable_thinking,
-        "thinking_effort": run_options.thinking_effort,
-        "skill_names": run_options.skill_names,
-        "operator_name": username or user_id,
-        "options": options or {},
-        "file_ids": file_ids or [],
-        # 无人值守标记（评测/批量等内部调用方经 options 传入）：装配剔除
-        # ask_user_question；chat 入口恒 False
-        "disable_user_interaction": run_options.disable_user_interaction,
-    }
+        query="" if queued_message_id else query,
+        operator_name=username or "",
+        raw_options=options,
+        file_ids=file_ids,
+    )
     run_id, adopted_messages = await agent_inbox_service.start_run(
         conversation_id,
         user_id,
-        username or user_id,
+        username or "",
         runtime_context,
         adopt_pending_messages=not queued_message_id and not preserve_queued_messages,
         selected_message_id=queued_message_id,
         stream_started_wall_ms=stream_started_wall_ms,
     )
     await _persist_early_user_message_if_needed(
-        conversation_id, user_id, username or user_id, run_id, query, queued_message_id, preserve_queued_messages
+        conversation_id, user_id, username or "", run_id, query, queued_message_id, preserve_queued_messages
     )
 
     logger.info(
@@ -1920,7 +1849,7 @@ async def sql_completion_handler(
         run_id=run_id,
         conversation_id=conversation_id,
         user_id=user_id,
-        operator_name=username or user_id,
+        operator_name=username or "",
     )
     logger.info(
         "ChatData 阶段耗时: conversation_id=%s phase=completion.handler_done elapsed_ms=%d total_ms=%d",
@@ -1940,18 +1869,19 @@ async def sql_completion_handler(
     )
 
 
-async def _stream_run_events(
+def _stream_run_events(
     run_id: str,
     last_event_id: str = "0-0",
     request: Request | None = None,
 ) -> AsyncIterator[str]:
-    """订阅后台 Run 的 Redis Stream 事件。"""
-    async for event in agent_run_event_service.stream(
-        run_id=run_id,
-        last_event_id=last_event_id,
+    return stream_sse_with_heartbeat(
+        agent_run_event_service.stream(
+            run_id=run_id,
+            last_event_id=last_event_id,
+            is_disconnected=request.is_disconnected if request else None,
+        ),
         is_disconnected=request.is_disconnected if request else None,
-    ):
-        yield f"id: {event['stream_id']}\n{event['payload']}"
+    )
 
 
 async def resume_chat_data_question_handler(

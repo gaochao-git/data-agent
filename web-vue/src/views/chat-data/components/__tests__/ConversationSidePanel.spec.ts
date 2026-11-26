@@ -86,4 +86,63 @@ describe('ConversationSidePanel 贴底跟随', () => {
     expect(plain.getScrollTop()).toBe(0)
     plain.wrapper.unmount()
   })
+
+  it('用户上翻后出现「回到最新」，点击回到底部并恢复贴底跟随', async () => {
+    const { wrapper, body, getScrollTop } = await mountPanel(true)
+    // 走无平滑动画的兜底路径，避免 jsdom 未实现 scrollTo 影响断言
+    Object.defineProperty(body, 'scrollTo', { value: undefined, configurable: true })
+    const grow = body.querySelector<HTMLElement>('.grow')!
+
+    body.scrollTop = 100
+    body.dispatchEvent(new Event('scroll'))
+    await flush()
+    expect(wrapper.find('[data-side-panel-latest]').exists()).toBe(true)
+
+    await wrapper.find('[data-side-panel-latest]').trigger('click')
+    expect(getScrollTop()).toBe(1_000)
+    expect(wrapper.find('[data-side-panel-latest]').exists()).toBe(false)
+
+    // 回底后恢复跟随：后续流式增长继续贴底
+    grow.textContent = '回底后继续增长的过程内容'
+    await flush()
+    expect(getScrollTop()).toBe(1_000)
+    wrapper.unmount()
+  })
+})
+
+
+describe('ConversationSidePanel 关闭兜底', () => {
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  it('Esc 关闭面板，输入框内的 Esc 留给控件自己处理', async () => {
+    const wrapper = mount(ConversationSidePanel, {
+      props: { open: true, showTrigger: false, showClose: false },
+      slots: { default: '<div><input data-test-input /></div>' },
+      attachTo: document.body,
+    })
+    await flush()
+
+    const input = wrapper.find('[data-test-input]').element as HTMLInputElement
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    expect(wrapper.emitted('close')).toBeUndefined()
+
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    expect(wrapper.emitted('close')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('面板关闭时 Esc 不触发关闭事件', async () => {
+    const wrapper = mount(ConversationSidePanel, {
+      props: { open: false, showTrigger: false, showClose: false },
+      slots: { default: '<div>内容</div>' },
+      attachTo: document.body,
+    })
+    await flush()
+
+    document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    expect(wrapper.emitted('close')).toBeUndefined()
+    wrapper.unmount()
+  })
 })

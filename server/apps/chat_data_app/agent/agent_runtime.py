@@ -18,6 +18,7 @@ from langchain_core.messages import AIMessage
 from utils.logger import get_logger
 
 from ..services.llm_config import get_chat_data_llm
+from .middleware.assembly import assemble_middleware
 from .middleware.skill_prerequisite import SkillPrerequisiteMiddleware
 from .middleware.tool_call_normalizer import (
     create_tool_call_name_normalizer_middleware,
@@ -37,9 +38,6 @@ TODO_TOOL_DESCRIPTION = (
     "每完成一项立即标记 completed。"
 )
 TODO_SYSTEM_PROMPT = """## write_todos
-- 多步任务先维护待办清单并展示进度；简单单步任务不要用。
-- 开始前为每个具体步骤建一条 todo；未完成期间保持正在处理的 todo 为 in_progress（并行时可有多个）。
-- 完成一项立即标记 completed，不要批量补记。
 - 最终回答写在最后一次 write_todos 之后的正文里，不能只靠更新 todos 交付。"""
 
 
@@ -159,7 +157,7 @@ MIDDLEWARE_CANONICAL_ORDER: tuple[str, ...] = (
     "ToolCallRateAlertMiddleware",  # 与计时同层：只统计通过围栏的真实调用，被拒绝的调用不计入频次
     "ToolCallHistoryRepairMiddleware",  # 历史修复先于 steering / 压缩消费消息
     "SteeringMiddleware",  # 在压缩之前注入插话，避免被摘要吞掉
-    "SubagentMiddleware",  # 派发决策先于任务规划：task 工具注册 + 子智能体使用说明追加进系统提示
+    "SubagentMiddleware",  # 派发决策先于任务规划：subagent 工具注册 + 子智能体使用说明追加进系统提示
     "TodoListMiddleware",  # 复杂分析的任务分解规划（langchain 官方）：todos 存 state 随 checkpoint 持久，压缩不丢
     "AfterModelHistoryMiddleware",  # after_model 按列表逆序执行：本行先于 ToolApprovalMiddleware（列表更靠前）跑
     # ToolApprovalMiddleware 也是 after_model（批量审批中断）：逆序执行意味着历史快照先落、
@@ -231,4 +229,4 @@ def build_standard_agent_middleware(
         "ToolResultMiddleware": tool_result_middleware,
         "ToolErrorMiddleware": ToolErrorMiddleware(on_tool_error),
     }
-    return [slots[name] for name in MIDDLEWARE_CANONICAL_ORDER if slots[name] is not None]
+    return assemble_middleware(MIDDLEWARE_CANONICAL_ORDER, slots)

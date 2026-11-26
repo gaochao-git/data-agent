@@ -1,0 +1,237 @@
+"""本轮图推进次数（supersteps）计数与持久化单测。
+
+口径：LangGraph 节点回调 metadata.langgraph_step = 真实引擎步；每次 invoke
+以首个节点回调为基线从 0 起算，与 recursion_limit 的额度口径一致。
+"""
+
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
+os.environ.setdefault("FXCJG_DB", "fxcjg_test")
+os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
+
+from types import SimpleNamespace
+from uuid import uuid4
+
+import pytest
+from langchain.agents import create_agent
+from langchain.agents.middleware import AgentMiddleware
+from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langgraph.errors import GraphRecursionError
+
+from apps.chat_data_app import agent_run_support
+from apps.chat_data_app import agent_stream as agent_stream_module
+from apps.chat_data_app.agent.middleware import subagent_stream
+from apps.chat_data_app.agent.middleware.subagents import _build_task_result_artifacts
+from apps.chat_data_app.agent.run.conversation_event_service import _serialize_subagent_artifacts
+
+
+def _adapter(config=None):
+    return agent_stream_module._AgentSseStreamAdapter(
+        agent=SimpleNamespace(),
+        initial_state={},
+        config=config if config is not None else {"recursion_limit": 1000},
+    )
+
+
+async def _collect(adapter, event):
+    return [item async for item in adapter._process_stream_event(event, started_at=0.0)]
+
+
+@pytest.mark.asyncio
+async def test_run_steps_use_langgraph_node_step_excluding_nested_subgraph():
+    adapter = _adapter()
+    tracker = adapter._graph_step_tracker
+
+    assert await _collect(adapter, ("values", {"messages": []})) == []
+    assert adapter.supersteps == 0
+
+    # 新 thread 首步可能是 1；同 thread 续跑可能从 8 起，回调步数都要归一到本轮 1。
+    await tracker.on_chain_start(
+        {},
+        {},
+        run_id=uuid4(),
+        metadata={"langgraph_node": "model", "langgraph_step": 8, "langgraph_checkpoint_ns": "model:id"},
+    )
+    first = list(adapter._sync_graph_steps())
+    assert len(first) == 1
+    assert "event: run_steps" in first[0]
+    assert '"supersteps": 1' in first[0]
+    assert '"recursion_limit": 1000' in first[0]
+    assert adapter.supersteps == 1
+
+    # 子图 callback 的 step 不能覆盖主图。
+    await tracker.on_chain_start(
+        {},
+        {},
+        run_id=uuid4(),
+        metadata={"langgraph_node": "model", "langgraph_step": 99, "langgraph_checkpoint_ns": "tools:id|subgraph"},
+    )
+    assert list(adapter._sync_graph_steps()) == []
+
+    await tracker.on_chain_start(
+        {},
+        {},
+        run_id=uuid4(),
+        metadata={"langgraph_node": "after", "langgraph_step": 9, "langgraph_checkpoint_ns": "after:id"},
+    )
+    second = list(adapter._sync_graph_steps())
+    assert '"supersteps": 2' in second[0]
+    assert list(adapter._sync_graph_steps()) == []
+
+
+@pytest.mark.asyncio
+async def test_adapter_stream_emits_true_graph_steps_at_recursion_limit():
+    def before_hook(name):
+        async def hook(self, state, runtime):
+            return None
+
+        return type(name, (AgentMiddleware,), {"abefore_model": hook})
+
+    def after_hook(name):
+        async def hook(self, state, runtime):
+            return None
+
+        return type(name, (AgentMiddleware,), {"aafter_model": hook})
+
+    model = GenericFakeChatModel(messages=iter([AIMessage(content="ok")]))
+    middleware = [before_hook(f"B{i}")() for i in range(3)]
+    middleware += [after_hook(f"A{i}")() for i in range(3)]
+    agent = create_agent(model=model, tools=[], middleware=middleware)
+    adapter = agent_stream_module._AgentSseStreamAdapter(
+        agent=agent,
+        initial_state={"messages": [HumanMessage(content="hi")]},
+        config={"recursion_limit": 7},
+    )
+
+    events = []
+    with pytest.raises(GraphRecursionError):
+        async for event in adapter.stream_events():
+            events.append(event)
+
+    run_steps = [event for event in events if isinstance(event, str) and event.startswith("event: run_steps\n")]
+    assert '"supersteps": 4, "recursion_limit": 7' in run_steps[0]
+    assert '"supersteps": 7, "recursion_limit": 7' in run_steps[-1]
+    assert adapter.supersteps == 7
+
+
+@pytest.mark.asyncio
+async def test_finish_persists_supersteps_without_token_usage():
+    class _StateAgent:
+        async def aget_state(self, config):
+            return SimpleNamespace(values={"messages": []}, interrupts=(), next=())
+
+    adapter = agent_stream_module._AgentSseStreamAdapter(
+        agent=_StateAgent(),
+        initial_state={},
+        config={"recursion_limit": 1000},
+    )
+    adapter.supersteps = 3
+
+    payload = await adapter.finish()
+
+    assert payload["generation_stats"]["supersteps"] == 3
+    assert payload["generation_stats"]["recursion_limit"] == 1000
+
+
+def test_subagent_steps_event_and_snapshot_fields():
+    state = subagent_stream._SubagentStreamState("call-1")
+    state.superstep_limit = 1000
+    events: list[dict] = []
+    writer = events.append
+
+    subagent_stream._process_subagent_chunk(("values", {"messages": []}), state, writer, "call-1")
+    assert events == []
+
+    subagent_stream._process_subagent_chunk(("values", {"messages": []}), state, writer, "call-1")
+    assert state.supersteps == 1
+    assert events[-1]["type"] == "subagent_tool"
+    event = events[-1]["event"]
+    assert event["event_type"] == "subagent_steps"
+    assert event["parent_tool_call_id"] == "call-1"
+    assert event["supersteps"] == 1
+    assert event["recursion_limit"] == 1000
+
+    subagent_stream._process_subagent_chunk(("values", {"__interrupt__": [{"value": "ok"}]}), state, writer, "call-1")
+    assert state.supersteps == 1
+
+    snapshot = subagent_stream._subagent_process_snapshot([], None, supersteps=4, recursion_limit=1000)
+    assert snapshot["subagent_supersteps"] == 4
+    assert snapshot["subagent_recursion_limit"] == 1000
+
+    progress = subagent_stream._subagent_progress_snapshot(state)
+    assert progress["supersteps"] == 1
+    assert progress["recursion_limit"] == 1000
+
+
+@pytest.mark.asyncio
+async def test_subagent_stream_wires_values_counting_into_captured():
+    class _FakeRunnable:
+        async def astream(self, state, config, stream_mode, context=None):
+            assert stream_mode == ["values", "updates", "messages", "custom"]
+            assert config["recursion_limit"] == 1000
+            yield ("values", {"messages": []})
+            yield ("values", {"messages": []})
+            yield ("values", {"messages": []})
+
+    events: list[dict] = []
+    captured: dict = {}
+    await subagent_stream._run_subagent_with_events(
+        _FakeRunnable(),
+        {"messages": []},
+        {"recursion_limit": 1000},
+        events.append,
+        parent_tool_call_id="call-1",
+        captured=captured,
+    )
+
+    assert [item["event"]["supersteps"] for item in events] == [1, 2]
+    assert captured["supersteps"] == 2
+    assert captured["recursion_limit"] == 1000
+
+
+def test_subagent_artifacts_survive_tool_message_roundtrip():
+    captured = {"supersteps": 4, "recursion_limit": 1000}
+    artifacts = _build_task_result_artifacts([], None, captured)
+    message = ToolMessage(content="report", tool_call_id="call-1", additional_kwargs=artifacts)
+
+    serialized = _serialize_subagent_artifacts(message)
+
+    assert serialized["subagent_supersteps"] == 4
+    assert serialized["subagent_recursion_limit"] == 1000
+
+
+@pytest.mark.asyncio
+async def test_partial_history_keeps_failure_supersteps(monkeypatch):
+    class _StateAgent:
+        async def aget_state(self, config):
+            assert config == {"recursion_limit": 1000}
+            return SimpleNamespace(values={"messages": [AIMessage(content="部分回答", id="assistant-1")]})
+
+    adapter = SimpleNamespace(
+        agent=_StateAgent(),
+        config={"recursion_limit": 1000},
+        state=None,
+        supersteps=2,
+        reasoning_segments=[],
+    )
+    persisted = []
+
+    async def persist_turn(**kwargs):
+        persisted.append(kwargs)
+
+    monkeypatch.setattr(agent_stream_module.conversation_event_service, "persist_turn", persist_turn)
+
+    await agent_run_support._persist_partial_agent_turn_history(
+        adapter,
+        conversation_id="conv-failed",
+        user_id="user-1",
+        username="用户一",
+        turn_id="turn-1",
+    )
+
+    generation_stats = persisted[0]["messages"][0].additional_kwargs["generation_stats"]
+    assert generation_stats == {"supersteps": 2, "recursion_limit": 1000}

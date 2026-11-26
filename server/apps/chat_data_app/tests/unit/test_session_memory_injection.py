@@ -79,7 +79,7 @@ def test_subagent_spec_memory_block_defaults_empty():
 
 
 def test_build_subagent_middleware_passes_memory_block_to_specs():
-    options = AgentRuntimeOptions(explore_subagent_enabled=True, plan_subagent_enabled=True)
+    options = AgentRuntimeOptions(explore_subagent_enabled=True, general_subagent_enabled=True)
     middleware = data_agent.build_subagent_middleware(options, [], model=object(), memory_block="- [口径] A")
     assert middleware is not None
     assert {spec.memory_block for spec in middleware.specs} == {"- [口径] A"}

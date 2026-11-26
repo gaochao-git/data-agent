@@ -137,9 +137,20 @@ const updatePanelPosition = () => {
   }
 }
 
+// 历史 timeline 会剥离 breakdown 的正文，工具 schema 又无法从会话消息反查；
+// 只有这类行缺失时才值得回源详情接口。消息正文可凭 message_id 在前端反查，
+// 紧凑快照里的计数行也不需要重复请求。
+const needsTokenUsageDetail = (items?: ChatDataTokenUsageBreakdown[]): boolean => {
+  if (!items?.length) return true
+  return items.some(item => {
+    if (item.role === 'tool_schema' && !item.content) return true
+    return Boolean(item.children?.length && needsTokenUsageDetail(item.children))
+  })
+}
+
 const loadTokenUsageDetail = async () => {
   if (!props.conversationId || detailLoaded.value || detailLoading.value) return
-  if (props.usage?.breakdown?.length) {
+  if (!needsTokenUsageDetail(props.usage?.breakdown)) {
     detailLoaded.value = true
     return
   }

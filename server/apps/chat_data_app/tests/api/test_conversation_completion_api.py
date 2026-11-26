@@ -78,7 +78,6 @@ def _stub_conversation_event_writes(monkeypatch):
                         datasource_id=context.get("datasource_id"),
                         user_id=user_id,
                         username=operator_name,
-                        member_datasource_ids=context.get("member_datasource_ids") or [],
                         semantic_config_id=context.get("semantic_config_id"),
                         request=None,
                         model_id=context.get("model_id"),
@@ -138,7 +137,7 @@ class FakeGraph:
         self.events = events
         self.initial_state = None
 
-    async def astream(self, initial_state, config=None, stream_mode=None):
+    async def astream(self, initial_state, config=None, stream_mode=None, context=None):
         self.initial_state = initial_state
         for event in self.events:
             yield event
@@ -268,7 +267,7 @@ def test_completion_api_streams_multi_tool_result_passthrough(client, auth_heade
     assert text.rstrip().endswith('"status": "finished"}')
 
     assert "mode" not in graph.initial_state
-    assert graph.initial_state["execution_context"]["datasource_id"] == "ds_a"
+    assert "execution_context" not in graph.initial_state
     assert graph.initial_state["messages"][0].additional_kwargs["timestamp"]
 
 

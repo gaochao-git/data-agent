@@ -32,11 +32,16 @@ def test_conversation_workspace_file_routes_read_shared_persisted_workspace(clie
             {"path": "/outputs/chart.json", "relative_path": "outputs/chart.json"},
         ]
 
+    async def list_directories(conversation_id, *, user_id):
+        assert (conversation_id, user_id) == ("conv_a", "user_a")
+        return [{"path": "/mnt/user-data/outputs/123", "relative_path": "outputs/123", "name": "123"}]
+
     async def read_file(conversation_id, *, user_id, path):
         assert (conversation_id, user_id, path) == ("conv_a", "user_a", "/outputs/chart.json")
         return {"path": "/outputs/chart.json", "content": "{}"}
 
     monkeypatch.setattr(workspace_routes, "list_workspace_files_for_conversation", list_files)
+    monkeypatch.setattr(workspace_routes, "list_workspace_directories_for_conversation", list_directories)
     monkeypatch.setattr(workspace_routes, "read_workspace_file_for_conversation", read_file)
 
     list_response = client.get("/api/chatdata/conversations/conv_a/workspace-files", headers=auth_headers)
@@ -49,6 +54,9 @@ def test_conversation_workspace_file_routes_read_shared_persisted_workspace(clie
     assert list_response.status_code == 200
     assert list_response.json()["data"]["files"] == [
         {"path": "/outputs/chart.json", "relative_path": "outputs/chart.json"}
+    ]
+    assert list_response.json()["data"]["directories"] == [
+        {"path": "/mnt/user-data/outputs/123", "relative_path": "outputs/123", "name": "123"}
     ]
     assert read_response.status_code == 200
     assert read_response.json()["data"]["content"] == "{}"
@@ -70,6 +78,38 @@ def test_conversation_workspace_hides_internal_context_file(client, auth_headers
 
     assert response.status_code == 200
     assert response.json()["code"] == ErrorCode.CHATDATA_NOT_FOUND
+
+
+def test_conversation_workspace_saves_text_file(client, auth_headers, monkeypatch):
+    _install_accessible_workspace(monkeypatch)
+
+    async def save_file(conversation_id, *, user_id, path, content, expected_mtime):
+        assert (conversation_id, user_id, path) == ("conv_a", "user_a", "/mnt/user-data/workspace/notes.md")
+        assert content == "- [口径] 新值\n"
+        assert expected_mtime == 123.5
+        return {"path": path, "bytes": len(content.encode("utf-8")), "mtime": 124.5}
+
+    monkeypatch.setattr(workspace_routes, "save_workspace_file_for_conversation", save_file)
+
+    response = client.put(
+        "/api/chatdata/conversations/conv_a/workspace-files/content",
+        json={
+            "path": "/mnt/user-data/workspace/notes.md",
+            "content": "- [口径] 新值\n",
+            "expected_mtime": 123.5,
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["msg"] == "保存成功"
+    assert payload["data"] == {
+        "path": "/mnt/user-data/workspace/notes.md",
+        "bytes": len("- [口径] 新值\n".encode()),
+        "mtime": 124.5,
+        "saved": True,
+    }
 
 
 def test_conversation_workspace_raw_route_hides_internal_context_file(client, auth_headers, monkeypatch):
@@ -338,7 +378,7 @@ def test_conversation_workspace_delete_route_maps_audit_and_missing_files(client
 
     audit_response = client.delete(
         "/api/chatdata/conversations/conv_a/workspace-files",
-        params={"path": "/mnt/user-data/outputs/query_result/result_1.json"},
+        params={"path": "/mnt/user-data/workspace/.system/query_result/result_1.json"},
         headers=auth_headers,
     )
     missing_response = client.delete(

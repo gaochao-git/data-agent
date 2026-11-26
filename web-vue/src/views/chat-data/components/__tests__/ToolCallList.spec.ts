@@ -50,7 +50,7 @@ describe('ToolCallList', () => {
     const wrapper = mountList([
       toolCall({
         tool_call_id: 'call-task',
-        tool_name: 'task',
+        tool_name: 'subagent',
         args: { description: '任务书' },
         status: 'running',
         subagentTrail: [

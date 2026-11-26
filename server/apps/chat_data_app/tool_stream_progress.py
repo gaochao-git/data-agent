@@ -6,9 +6,9 @@
 generation_speed 滑窗采样负责（原 stream_stats 参数字符上报已随前端本地估算下线）。
 """
 
+import time
 from typing import Any
 
-from .agent_run_support import _get_timestamp
 from .sse_protocol import SSE_EVENT_TOOL_PROGRESS
 from .sse_protocol import format_sse as _format_sse
 
@@ -65,22 +65,43 @@ def _count_text_lines(text: str) -> int:
     return text.count("\n") + (0 if text.endswith("\n") else 1)
 
 
+def extract_tool_line_counts(tool_name: str, args: dict[str, Any]) -> tuple[int, int] | None:
+    """从完整工具参数计算 file_write/file_edit 的 (写入行数, 移除行数)。
+
+    直播阶段按流式 args 统计；工具开始与历史快照拿到的已经是完整参数，
+    统一走这里，避免两套口径。非行数统计工具返回 None。
+    """
+    fields = _STREAMING_LINE_COUNT_TOOLS.get(str(tool_name or "").strip())
+    if not fields:
+        return None
+    added = args.get(fields["added_field"])
+    removed = args.get(fields["removed_field"]) if fields.get("removed_field") else ""
+    return (
+        _count_text_lines(added if isinstance(added, str) else ""),
+        _count_text_lines(removed if isinstance(removed, str) else ""),
+    )
+
+
 def _format_tool_progress_event(
     tool_call_id: str,
     tool_name: str,
     content_lines: int | None,
     removed_lines: int | None,
     intent: str | None = None,
+    args: dict[str, Any] | None = None,
+    replace_args: bool = False,
 ) -> str:
     """工具执行中推送进度事件：file_write/file_edit 的实时行数（+N / -M）、通用 intent 预渲染。
 
     行数与 intent 字段按需携带：非行数统计工具的事件只带 intent，避免前端把 0 当成有效行数。
+    args 用于补发完整工具参数：流式碎片可能缺省字段，最终 AIMessage 才是权威口径。
+    replace_args=True 表示 args 是最终调用参数的完整快照，前端应整份替换而不是合并。
     """
     data: dict[str, Any] = {
         "type": SSE_EVENT_TOOL_PROGRESS,
         "tool_call_id": tool_call_id,
         "tool_name": tool_name,
-        "timestamp": _get_timestamp(),
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
     if content_lines is not None:
         data["content_lines"] = content_lines
@@ -88,6 +109,10 @@ def _format_tool_progress_event(
         data["removed_lines"] = removed_lines
     if intent:
         data["intent"] = intent
+    if args:
+        data["args"] = args
+        if replace_args:
+            data["replace_args"] = True
     return _format_sse(SSE_EVENT_TOOL_PROGRESS, data)
 
 

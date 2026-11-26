@@ -32,6 +32,12 @@ KNOWN_EDGES = {
     ("plugins", "mcp"),
     ("run", "contracts"),
     ("skills", "contracts"),
+    # 运行技能源枚举包含插件提供的技能（skill_service._append_runtime_user_skill_source
+    # 读取 plugins.loader 的启用清单）；方向 skills→plugins 为有意设计，反向禁止。
+    ("skills", "plugins"),
+    # 工具构建上下文携带通用业务上下文（BusinessContext），tools 只读取不解释；
+    # contracts 为最底层纯类型，方向 tools→contracts 为有意设计。
+    ("tools", "contracts"),
     ("tools", "workspace"),
     ("workspace", "contracts"),
 }
@@ -138,3 +144,11 @@ def test_explicit_port_configuration_is_idempotent():
     assert get_skill_source() is not None
     assert get_skill_snapshot_source() is not None
     assert get_workspace_preview_source() is not None
+
+
+def test_app_startup_binds_subagent_task_service_port():
+    """子任务账本服务由应用启动入口显式绑定，不依赖实现模块 import 副作用。"""
+    from apps.chat_data_app.agent.contracts.subagent_task import get_subagent_task_service
+    from apps.chat_data_app.agent.run.subagent_task_service import subagent_task_service
+
+    assert get_subagent_task_service() is subagent_task_service

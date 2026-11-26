@@ -208,7 +208,7 @@ def test_copy_local_path_branches(tmp_path):
     with pytest.raises(ValueError, match="系统结果目录"):
         lb._copy_local_path(
             str(root),
-            f"/mnt/user-data/outputs/{cw_runtime_module.TOOL_OFFLOAD_DIR_NAME}/r.json",
+            "/mnt/user-data/workspace/.system/tool-offload/r.json",
             "/mnt/user-data/workspace/r.json",
         )
     with pytest.raises(FileNotFoundError, match="源路径不存在"):
@@ -649,6 +649,35 @@ async def test_run_bash_timeout_and_skill_cwd(tmp_path):
     assert from_skill["exit_code"] == 0
     # 技能 cwd 返回模型可见的虚拟路径，不泄漏 runtime-skills 物理位置
     assert from_skill["cwd"] == "/mnt/skills/demo-skill"
+
+
+@pytest.mark.asyncio
+async def test_validate_bash_paths_rejects_semantic_snapshot(tmp_path):
+    """语义缓存是生效的只读快照：bash 无法区分读/写意图，一律拒绝。"""
+    runtime, _root = _runtime(tmp_path)
+
+    for command in (
+        "echo x > /mnt/user-data/workspace/.system/semantic/model.yaml",
+        "cat /mnt/user-data/workspace/.system/semantic/model.yaml",
+        "cd /mnt/user-data/workspace/.system/semantic && echo x > model.yaml",
+    ):
+        with pytest.raises(ValueError, match="只读语义模型快照"):
+            await runtime.validate_bash_paths(command=command)
+
+    # 仅前缀相似的普通目录不受影响
+    await runtime.validate_bash_paths(command="cat /mnt/user-data/workspace/.system/semantic-backup/a.txt")
+
+
+@pytest.mark.asyncio
+async def test_run_bash_rejects_semantic_snapshot_cwd(tmp_path):
+    """cwd 指向 semantic 时相对路径写入会落进缓存，必须在执行前拒绝。"""
+    runtime, _root = _runtime(tmp_path)
+    with pytest.raises(ValueError, match="只读语义模型快照"):
+        await runtime.run_bash(
+            command="echo x > model.yaml",
+            cwd="/mnt/user-data/workspace/.system/semantic",
+            timeout_seconds=30,
+        )
 
 
 @pytest.mark.asyncio

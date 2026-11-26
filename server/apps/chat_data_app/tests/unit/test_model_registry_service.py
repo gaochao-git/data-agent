@@ -67,6 +67,8 @@ def registry_env(monkeypatch):
                 raise
 
     monkeypatch.setattr(model_registry_dao, "default_get_session", fake_get_session)
+    # load_registry_from_db 固定走独立会话；测试里同样指向内存 sqlite。
+    monkeypatch.setattr(llm_config, "get_isolated_session", fake_get_session)
     yield
     llm_config.reset_registry_cache()
     asyncio.run(engine.dispose())
@@ -565,6 +567,28 @@ def test_load_registry_from_db_reads_enabled_rows(registry_env):
         assert configs[0]["temperature"] == 0.3
 
     asyncio.run(run())
+
+
+def test_load_registry_from_db_uses_isolated_session(monkeypatch):
+    captured: dict[str, object] = {}
+
+    @asynccontextmanager
+    async def isolated_session():
+        yield object()
+
+    class FakeDao:
+        def __init__(self, session_context=None):
+            captured["session_context"] = session_context
+
+        async def list_rows(self, *, enabled_only: bool = False):
+            assert enabled_only is True
+            return []
+
+    monkeypatch.setattr(llm_config, "get_isolated_session", isolated_session)
+    monkeypatch.setattr(llm_config, "ModelRegistryDao", FakeDao)
+
+    assert asyncio.run(llm_config.load_registry_from_db()) == []
+    assert captured["session_context"] is isolated_session
 
 
 # ----------- 参数/注册键校验补充分支 -----------

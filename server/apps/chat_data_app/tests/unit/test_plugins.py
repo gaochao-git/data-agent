@@ -50,6 +50,7 @@ def _plugin_root(tmp_path, monkeypatch):
     monkeypatch.setattr(plugin_loader, "plugins_root", lambda chat_data_home=None: root)
     monkeypatch.setattr(plugin_installer, "plugin_dir", lambda name, chat_data_home=None: root / name)
     monkeypatch.setattr(plugin_loader, "_enabled_state", None)
+    monkeypatch.setattr(plugin_loader, "_access_state", None)
     clear_metadata_cache()
     yield root
     clear_metadata_cache()
@@ -200,7 +201,40 @@ def test_install_plugin_from_zip_bytes_happy_path():
     assert (root / "ops-readonly" / "plugin.json").is_file()
     assert (root / "ops-readonly" / "skills" / "fault-analysis" / "SKILL.md").is_file()
     assert not list(root.glob("*.installing"))
+    assert not list(root.glob(".installing-*"))
     assert manifest.name == "ops-readonly"
+
+
+def test_install_uses_unique_hidden_staging_dir(monkeypatch):
+    """每次安装独占一个隐藏临时目录：多节点/多 worker 并发安装不会互相覆盖。"""
+    seen = []
+    real_extract = plugin_installer._safe_extract
+
+    def _spy(archive, members, staging, zip_root):
+        seen.append(staging)
+        real_extract(archive, members, staging, zip_root)
+
+    monkeypatch.setattr(plugin_installer, "_safe_extract", _spy)
+    install_plugin_from_zip_bytes(_build_zip(VALID_MANIFEST))
+    uninstall_plugin("ops-readonly")
+    install_plugin_from_zip_bytes(_build_zip(VALID_MANIFEST))
+
+    assert len(seen) == 2
+    assert seen[0] != seen[1]
+    assert all(path.name.startswith(".installing-") for path in seen)
+    assert not any(path.exists() for path in seen)
+
+
+def test_install_keeps_fresh_staging_from_another_node():
+    """别的节点正在解包（未超时）的临时目录不能被本节点顺手删掉。"""
+    root = plugin_loader.plugins_root()
+    root.mkdir(parents=True, exist_ok=True)
+    other = root / ".installing-ops-readonly-othernode"
+    other.mkdir()
+
+    install_plugin_from_zip_bytes(_build_zip(VALID_MANIFEST))
+
+    assert other.is_dir()
 
 
 def test_install_plugin_wrapped_in_single_top_dir():
@@ -351,6 +385,31 @@ def test_enabled_views_exclude_disabled_plugins():
     assert enabled_plugin_mcp_servers() == []
 
 
+def test_selected_plugin_skills_are_filtered_by_username_without_coupling_mcp():
+    _install_default_plugin()
+    _set_enabled_snapshot({"ops-readonly"})
+    plugin_loader._access_state = {
+        "ops-readonly": ("selected", frozenset({"张三"})),
+    }
+
+    assert enabled_plugin_skill_sources("张三")
+    assert enabled_plugin_skill_sources("李四") == []
+    assert enabled_plugin_skill_sources("") == []
+    # selected 只约束插件及插件技能；MCP 未来走独立权限表，当前枚举保持原语义。
+    assert enabled_plugin_mcp_servers()
+
+
+def test_admin_plugin_skill_sources_ignore_current_user_permission():
+    _install_default_plugin()
+    _set_enabled_snapshot({"ops-readonly"})
+    plugin_loader._access_state = {
+        "ops-readonly": ("selected", frozenset({"张三"})),
+    }
+
+    assert enabled_plugin_skill_sources("") == []
+    assert plugin_loader.enabled_plugin_skill_sources_for_admin()
+
+
 def test_plugin_loader_skips_dir_name_mismatch():
     root = plugin_loader.plugins_root()
     target = root / "other-name"
@@ -360,24 +419,43 @@ def test_plugin_loader_skips_dir_name_mismatch():
     assert load_plugins_metadata() == {}
 
 
+def test_manifest_edit_invalidates_disk_cache_without_restart():
+    """原地改 ``plugin.json`` 后下一轮扫描就要生效（多 worker 不依赖广播/重启）。"""
+    target = plugin_loader.plugins_root() / "ops-readonly"
+    target.mkdir(parents=True)
+    manifest_path = target / "plugin.json"
+    manifest_path.write_text(json.dumps(VALID_MANIFEST, ensure_ascii=False), encoding="utf-8")
+    assert load_plugins_metadata()["ops-readonly"].manifest.version == "1.0.0"
+
+    before = manifest_path.stat()
+    manifest_path.write_text(
+        json.dumps({**VALID_MANIFEST, "version": "1.1.0"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    # 同一纳秒内写完时 mtime 可能不变，显式推进时间戳让测试不依赖文件系统精度。
+    os.utime(manifest_path, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000))
+    assert load_plugins_metadata()["ops-readonly"].manifest.version == "1.1.0"
+
+
 # ============ refresh_plugin_state（DB 快照刷新）============
 
 
 @pytest.mark.asyncio
 async def test_refresh_plugin_state_populates_from_dao(monkeypatch):
     class _Dao:
-        async def list_enabled_names(self):
-            return {"ops-readonly"}
+        async def list_enabled_access(self):
+            return {"ops-readonly": ("all", frozenset())}
 
     monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _Dao())
     await refresh_plugin_state()
     assert plugin_loader._enabled_state == frozenset({"ops-readonly"})
+    assert plugin_loader._access_state == {"ops-readonly": ("all", frozenset())}
 
 
 @pytest.mark.asyncio
 async def test_refresh_plugin_state_fail_closed_on_db_error(monkeypatch):
     class _Dao:
-        async def list_enabled_names(self):
+        async def list_enabled_access(self):
             raise RuntimeError("db down")
 
     monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _Dao())
@@ -385,6 +463,7 @@ async def test_refresh_plugin_state_fail_closed_on_db_error(monkeypatch):
     await refresh_plugin_state()
     # DB 读失败：清空快照、不兜底旧值
     assert plugin_loader._enabled_state == frozenset()
+    assert plugin_loader._access_state == {}
 
 
 # ============ service 编排（install / 启停 / 卸载）============
@@ -399,8 +478,8 @@ async def test_service_install_writes_db_and_refreshes(monkeypatch):
             calls["upsert"] = kw
 
     class _RefreshDao:
-        async def list_enabled_names(self):
-            return {"ops-readonly"}
+        async def list_enabled_access(self):
+            return {"ops-readonly": ("all", frozenset())}
 
     monkeypatch.setattr(plugin_service, "PluginDao", lambda *a, **k: _ServiceDao())
     monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _RefreshDao())
@@ -447,8 +526,8 @@ async def test_service_set_enabled_calls_dao_and_refreshes(monkeypatch):
             seen.update(kw)
             return True
 
-        async def list_enabled_names(self):
-            return set()
+        async def list_enabled_access(self):
+            return {}
 
     monkeypatch.setattr(plugin_service, "PluginDao", lambda *a, **k: _Dao())
     monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _Dao())
@@ -480,8 +559,8 @@ async def test_service_set_enabled_reconciles_orphan_plugin(monkeypatch):
         async def upsert_installed(self, **kw):
             calls["upsert"] = kw
 
-        async def list_enabled_names(self):
-            return {"ops-readonly"}
+        async def list_enabled_access(self):
+            return {"ops-readonly": ("all", frozenset())}
 
     monkeypatch.setattr(plugin_service, "PluginDao", lambda *a, **k: _Dao())
     monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _Dao())
@@ -513,8 +592,8 @@ async def test_service_set_enabled_returns_false_when_missing_on_disk_and_db(mon
         async def upsert_installed(self, **kw):  # pragma: no cover - 不应被调用
             raise AssertionError("磁盘上没有插件时不应补建行")
 
-        async def list_enabled_names(self):
-            return set()
+        async def list_enabled_access(self):
+            return {}
 
     monkeypatch.setattr(plugin_service, "PluginDao", lambda *a, **k: _Dao())
     monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _Dao())
@@ -539,8 +618,8 @@ async def test_service_uninstall_removes_files_and_marks_deleted(monkeypatch):
             seen.update(kw)
             return True
 
-        async def list_enabled_names(self):
-            return set()
+        async def list_enabled_access(self):
+            return {}
 
     monkeypatch.setattr(plugin_service, "PluginDao", lambda *a, **k: _Dao())
     monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _Dao())
@@ -569,6 +648,7 @@ async def test_service_list_merges_db_audit_fields(monkeypatch):
 
     db_row = _types.SimpleNamespace(
         plugin_name="ops-readonly",
+        scope_type="all",
         create_by_name="张三",
         create_time=datetime(2026, 9, 22, 10, 0, 0),
     )
@@ -577,8 +657,14 @@ async def test_service_list_merges_db_audit_fields(monkeypatch):
         async def list_active(self):
             return [db_row]
 
-        async def list_enabled_names(self):
-            return {"ops-readonly", "ops-orphan"}
+        async def list_active_permissions(self):
+            return {}
+
+        async def list_enabled_access(self):
+            return {
+                "ops-readonly": ("all", frozenset()),
+                "ops-orphan": ("all", frozenset()),
+            }
 
     monkeypatch.setattr(plugin_service, "PluginDao", lambda *a, **k: _Dao())
     monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _Dao())
@@ -611,8 +697,11 @@ async def test_service_list_paginates_sorted_by_name(monkeypatch):
         async def list_active(self):
             return []
 
-        async def list_enabled_names(self):
-            return set()
+        async def list_active_permissions(self):
+            return {}
+
+        async def list_enabled_access(self):
+            return {}
 
     monkeypatch.setattr(plugin_service, "PluginDao", lambda *a, **k: _Dao())
     monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _Dao())
@@ -652,3 +741,60 @@ def test_mcp_server_admission_view_reports_ok_and_errors():
     invalid = plugin_service._mcp_server_admission_view({"id": "x", "transport": "websocket"})
     assert invalid["ok"] is False
     assert invalid["errors"]
+
+
+@pytest.mark.asyncio
+async def test_plugin_service_keeps_blocking_io_off_event_loop(monkeypatch):
+    """解包、递归删除与磁盘扫描都是同步 IO，必须跑在事件循环线程之外。"""
+    import threading
+    from types import SimpleNamespace
+
+    loop_thread = threading.get_ident()
+    seen: dict[str, int] = {}
+    manifest = SimpleNamespace(
+        name="demo",
+        version="1.0.0",
+        display_name="Demo",
+        description="",
+        to_dict=lambda: {"name": "demo", "version": "1.0.0"},
+    )
+
+    def fake_install(_data: bytes):
+        seen["install"] = threading.get_ident()
+        return manifest
+
+    def fake_uninstall(_name: str):
+        seen["uninstall"] = threading.get_ident()
+        return manifest
+
+    def fake_metadata():
+        seen["scan"] = threading.get_ident()
+        return {}
+
+    class _Dao:
+        async def upsert_installed(self, **_kwargs):
+            return None
+
+        async def mark_deleted(self, **_kwargs):
+            return None
+
+        async def list_active(self):
+            return []
+
+    async def _noop_refresh():
+        return None
+
+    monkeypatch.setattr(plugin_service.installer, "install_plugin_from_zip_bytes", fake_install)
+    monkeypatch.setattr(plugin_service.installer, "uninstall_plugin", fake_uninstall)
+    monkeypatch.setattr(plugin_service, "load_plugins_metadata", fake_metadata)
+    monkeypatch.setattr(plugin_service, "PluginDao", lambda: _Dao())
+    monkeypatch.setattr(plugin_service, "refresh_plugin_state", _noop_refresh)
+    monkeypatch.setattr(plugin_service, "_reset_runtime_caches", lambda: None)
+
+    await plugin_service.install_plugin(b"zip", operator_id="u1", operator_name="张三")
+    await plugin_service.uninstall_plugin("demo", operator_id="u1", operator_name="张三")
+    await plugin_service.list_plugins()
+
+    assert seen["install"] != loop_thread
+    assert seen["uninstall"] != loop_thread
+    assert seen["scan"] != loop_thread

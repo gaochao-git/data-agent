@@ -27,6 +27,7 @@ from apps.chat_data_app.agent.workspace.workspace_ops import (
     sandbox_render_office_html,
     sandbox_replace_text_file,
     sandbox_search_files,
+    sandbox_write_binary_file,
     sandbox_write_internal_text_files,
     sandbox_write_text_file,
     sandbox_write_tool_result,
@@ -36,6 +37,7 @@ from apps.chat_data_app.agent.workspace.workspace_sandbox_api import (
     run_command_in_sandbox,
 )
 from apps.chat_data_app.agent.workspace.workspace_sandbox_paths import (
+    _is_managed_semantic_model_sandbox_path,
     sandbox_path_to_visible,
     sandbox_visible_path,
     sandbox_workspace_dir,
@@ -46,6 +48,7 @@ from apps.chat_data_app.agent.workspace.workspace_session import (
     get_workspace_execution_session,
     invalidate_workspace_execution_session,
     read_sandbox_lifetime_seconds,
+    refresh_workspace_execution_session,
 )
 from apps.chat_data_app.agent.workspace.workspace_sync import (
     recover_pending_persistence,
@@ -104,6 +107,8 @@ class SandboxWorkspaceBackend:
             return True
         now = time.monotonic()
         if now - self._last_renew_at < _RENEW_MIN_INTERVAL_SECONDS:
+            # 刚续过期的缓存也要一起顺延，否则远端实例活着、进程缓存却先过期。
+            refresh_workspace_execution_session(session)
             return True
         async with self._renew_lock:
             now = time.monotonic()
@@ -113,6 +118,7 @@ class SandboxWorkspaceBackend:
                 await renew(timedelta(seconds=read_sandbox_lifetime_seconds()))
                 self._last_renew_at = time.monotonic()
                 self._renew_failure_logged = False
+                refresh_workspace_execution_session(session)
                 return True
             except Exception:
                 alive = await self._sandbox_alive(sandbox)
@@ -206,6 +212,17 @@ class SandboxWorkspaceBackend:
     ) -> dict[str, Any]:
         return await sandbox_write_text_file(
             session_ref=await self._session_ref(runtime), file_path=file_path, content=content, mode=mode
+        )
+
+    async def write_binary_file(
+        self,
+        runtime: ConversationWorkspaceRuntime,
+        *,
+        file_path: str,
+        data: bytes,
+    ) -> dict[str, Any]:
+        return await sandbox_write_binary_file(
+            session_ref=await self._session_ref(runtime), file_path=file_path, data=data
         )
 
     async def write_internal_text_files(
@@ -391,6 +408,11 @@ class SandboxWorkspaceBackend:
                 sandbox_visible_path(token)
             except ValueError:
                 invalid.append(token)
+                continue
+            # 与 local 后端同口径：语义模型快照只读，bash 无法区分读/写意图，
+            # 一律不开放（沙箱里是只读挂载，但校验口径保持一致）。
+            if _is_managed_semantic_model_sandbox_path(token):
+                invalid.append(token)
         if invalid:
             raise ValueError("bash_run 只允许访问当前会话目录或当前用户有权访问的技能路径: " + ", ".join(invalid[:3]))
 
@@ -403,6 +425,8 @@ class SandboxWorkspaceBackend:
         timeout_seconds: int,
     ) -> dict[str, Any]:
         sandbox_cwd = sandbox_visible_path(str(cwd or sandbox_workspace_dir()))
+        if _is_managed_semantic_model_sandbox_path(sandbox_cwd):
+            raise ValueError("bash_run 不允许将 cwd 设置为系统只读语义模型快照目录；请用 file_read / file_grep 读取")
         session_ref = await self._session_ref(runtime)
         session = session_ref.current
         if session is None:

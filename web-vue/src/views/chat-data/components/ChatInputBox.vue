@@ -25,6 +25,8 @@ interface Props {
   /** 最大字符数；设置后展示字数统计。 */
   maxlength?: number
   inputFocused?: boolean
+  /** 作为带 header 的 composer body 时，去掉自己的顶部圆角/边框/阴影，由外层统一承载。 */
+  attached?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -38,6 +40,7 @@ const props = withDefaults(defineProps<Props>(), {
   minRows: 1,
   maxHeight: 200,
   inputFocused: false,
+  attached: false,
 })
 
 const emit = defineEmits<{
@@ -54,8 +57,11 @@ const emit = defineEmits<{
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 
 const boxClass = computed(() => [
-  'chat-input-box rounded-2xl bg-white border border-black/[0.08] shadow-[0_2px_12px_rgba(0,0,0,0.06),0_0_0_1px_rgba(0,0,0,0.02)] transition-all duration-200',
-  props.inputFocused && 'border-blue-400/40 shadow-[0_2px_12px_rgba(0,0,0,0.06),0_0_0_3px_rgba(0,122,255,0.1)]'
+  'chat-input-box bg-white transition-all duration-200',
+  props.attached
+    ? 'rounded-b-2xl rounded-t-none border-0 shadow-none'
+    : 'rounded-2xl border border-black/[0.08] shadow-[0_2px_12px_rgba(0,0,0,0.06),0_0_0_1px_rgba(0,0,0,0.02)]',
+  !props.attached && props.inputFocused && 'border-blue-400/40 shadow-[0_2px_12px_rgba(0,0,0,0.06),0_0_0_3px_rgba(0,122,255,0.1)]'
 ])
 
 // 首行 26px，其余按 leading-relaxed(24px) 递增

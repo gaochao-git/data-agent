@@ -104,11 +104,12 @@ def resolve_conversation_id(request: Any) -> str:
 
 
 def resolve_user_id(request: Any) -> str:
-    """从 agent state 取业务用户，供告警侧定位责任人。"""
-    state = getattr(request, "state", None)
-    if not isinstance(state, Mapping):
+    """取业务用户标识供告警定位责任人：只读 run context，不回退 state。"""
+    runtime = getattr(request, "runtime", None)
+    context = getattr(runtime, "context", None)
+    if not isinstance(context, Mapping):
         return ""
-    return str(state.get("user_id") or "").strip()
+    return str(context.get("user_id") or "").strip()
 
 
 def resolve_tool_name(request: Any) -> str:

@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import shutil
 from typing import Any
@@ -64,20 +65,27 @@ async def list_plugins(*, limit: int = 50, offset: int = 0) -> dict[str, Any]:
     分页口径与定时任务一致（limit 已由 router 收敛到 [1, 200]）。
     """
     await refresh_plugin_state()
-    items = [item.to_dict() for item in load_plugins_metadata().values()]
+    # 磁盘扫描读 manifest 属同步 IO；变更后缓存被清空，首次列表必然全盘扫描。
+    metadata = await asyncio.to_thread(load_plugins_metadata)
+    items = [item.to_dict() for item in metadata.values()]
     for item in items:
         item["mcp_servers"] = [
             {**server, "admission": _mcp_server_admission_view(server)} for server in item.get("mcp_servers") or []
         ]
     audit_by_name: dict[str, ChatDataPlugin] = {}
+    permissions_by_plugin: dict[str, list[str]] = {}
     try:
-        audit_by_name = {row.plugin_name: row for row in await PluginDao().list_active()}
+        dao = PluginDao()
+        audit_by_name = {row.plugin_name: row for row in await dao.list_active()}
+        permissions_by_plugin = await dao.list_active_permissions()
     except Exception as err:
-        logger.warning("读取插件审计字段失败，列表将不展示创建人/创建时间: %s", err)
+        logger.warning("读取插件审计或权限字段失败，列表将降级展示: %s", err)
     for item in items:
         row = audit_by_name.get(item["name"])
         item["create_by_name"] = str(row.create_by_name or "") if row is not None else ""
         item["create_time"] = _format_db_time(row.create_time) if row is not None else ""
+        item["scope_type"] = str(row.scope_type or "all") if row is not None else "all"
+        item["user_names"] = permissions_by_plugin.get(item["name"], []) if item["scope_type"] == "selected" else []
     # 磁盘扫描本身按目录名排序（稳定），此处仅做分页切片
     ordered = sorted(items, key=lambda item: item["name"])
     return {"plugins": ordered[offset : offset + limit], "total": len(ordered)}
@@ -98,7 +106,8 @@ async def install_plugin(
 
     DB 写失败时回滚已解包目录，避免磁盘与 DB 不一致。
     """
-    manifest = installer.install_plugin_from_zip_bytes(zip_bytes)
+    # zip 解析、成员校验与安全解压（解压上限 200MB）全为同步 IO，放线程池避免阻塞事件循环。
+    manifest = await asyncio.to_thread(installer.install_plugin_from_zip_bytes, zip_bytes)
     try:
         await PluginDao().upsert_installed(
             plugin_name=manifest.name,
@@ -112,7 +121,7 @@ async def install_plugin(
     except Exception:
         rollback_dir = plugin_dir(manifest.name)
         if rollback_dir.is_dir():
-            shutil.rmtree(rollback_dir, ignore_errors=True)
+            await asyncio.to_thread(shutil.rmtree, rollback_dir, ignore_errors=True)
         clear_metadata_cache()
         logger.error("插件安装写库失败，已回滚解包目录: %s", manifest.name, exc_info=True)
         raise
@@ -135,7 +144,7 @@ async def _reconcile_orphan(
     命中即按 ``upsert_installed`` 复活/新建行，再落本次启停值；磁盘上没有则返回 False。
     列表展示不做写操作（读接口保持纯读），孤儿插件的启停开关自然触发补建。
     """
-    metadata = load_plugins_metadata().get(name)
+    metadata = (await asyncio.to_thread(load_plugins_metadata)).get(name)
     if metadata is None:
         return False
     manifest = metadata.manifest
@@ -203,7 +212,8 @@ async def uninstall_plugin(
     删盘成功但 DB 软删失败，会残留一条"活跃但无内容"的行——列表按磁盘扫描不会展示它，
     重装时按 plugin_name 复活同一行自愈，不影响正确性。
     """
-    manifest = installer.uninstall_plugin(name)
+    # 卸载会递归删除整个插件目录树，同样属于同步 IO。
+    manifest = await asyncio.to_thread(installer.uninstall_plugin, name)
     await PluginDao().mark_deleted(
         plugin_name=name,
         operator_id=operator_id,
@@ -215,9 +225,62 @@ async def uninstall_plugin(
     return manifest
 
 
+def _normalize_plugin_permission_scope(scope_type: str) -> str:
+    normalized = str(scope_type or "").strip().lower()
+    if normalized not in {"all", "selected"}:
+        raise ValueError("权限范围只能是 all 或 selected")
+    return normalized
+
+
+def _normalize_plugin_permission_user_names(user_names: list[str]) -> list[str]:
+    """按 username 精确去重并保留大小写；空白项或超长值直接拒绝。"""
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in user_names:
+        user_name = str(raw or "").strip()
+        if not user_name:
+            raise ValueError("授权用户名不能为空")
+        if len(user_name) > 100:
+            raise ValueError("授权用户名不能超过 100 个字符")
+        if user_name not in seen:
+            seen.add(user_name)
+            normalized.append(user_name)
+    if not normalized:
+        raise ValueError("指定用户授权至少需要选择一个 username")
+    return normalized
+
+
+async def set_plugin_permissions(
+    name: str,
+    *,
+    scope_type: str,
+    user_names: list[str],
+    operator_id: str,
+    operator_name: str,
+) -> dict[str, Any] | None:
+    """替换插件人员授权；插件不存在时返回 ``None``，否则返回落库结果。"""
+    if not PLUGIN_NAME_PATTERN.fullmatch(name):
+        raise ValueError(f"插件名非法: {name!r}")
+    normalized_scope = _normalize_plugin_permission_scope(scope_type)
+    normalized_users = _normalize_plugin_permission_user_names(user_names) if normalized_scope == "selected" else []
+    updated = await PluginDao().replace_permissions(
+        plugin_name=name,
+        scope_type=normalized_scope,
+        user_names=normalized_users,
+        operator_id=operator_id,
+        operator_name=operator_name,
+    )
+    if updated:
+        await refresh_plugin_state()
+    if not updated:
+        return None
+    return {"scope_type": normalized_scope, "user_names": normalized_users}
+
+
 __all__ = [
     "install_plugin",
     "list_plugins",
+    "set_plugin_permissions",
     "set_plugin_enabled",
     "uninstall_plugin",
 ]

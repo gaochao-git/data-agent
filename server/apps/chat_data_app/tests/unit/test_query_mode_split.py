@@ -302,7 +302,8 @@ def test_subagent_prompt_gets_ontology_hint_only_in_ontology_mode():
 
 
 def test_ontology_mode_registers_only_ontology_tool(monkeypatch, tmp_path):
-    from apps.chat_data_app.agent.data_agent import DatasourceContext, IdentityContext, assemble_tools
+    from apps.chat_data_app.agent.contracts.business_context import BusinessContext
+    from apps.chat_data_app.agent.data_agent import IdentityContext, assemble_tools
 
     monkeypatch.setenv("CHAT_DATA_ONTOLOGY_LOCATE_ENABLED", "1")
     monkeypatch.setenv("CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED", "1")
@@ -314,7 +315,7 @@ def test_ontology_mode_registers_only_ontology_tool(monkeypatch, tmp_path):
             options,
             runtime,
             identity_context=IdentityContext(user_id="u1"),
-            datasource_context=DatasourceContext(datasource_id="ds_a"),
+            business_context=BusinessContext(values={"datasource_id": "ds_a"}),
         )
     }
     assert "ontology_tool" in names
@@ -338,7 +339,8 @@ def _workspace(tmp_path):
 def test_context_budget_consumes_mode_specific_prompt_and_tools(monkeypatch, tmp_path):
     """context budget 按当前模式的实际 prompt/工具计算固定输入（不按模式硬编码）。"""
     from apps.chat_data_app.agent.context.context_budget import ContextRequestBudget
-    from apps.chat_data_app.agent.data_agent import DatasourceContext, IdentityContext, assemble_tools
+    from apps.chat_data_app.agent.contracts.business_context import BusinessContext
+    from apps.chat_data_app.agent.data_agent import IdentityContext, assemble_tools
 
     monkeypatch.setenv("CHAT_DATA_ONTOLOGY_LOCATE_ENABLED", "1")
     monkeypatch.setenv("CHAT_DATA_ONTOLOGY_OBJECT_READ_ENABLED", "1")
@@ -347,7 +349,7 @@ def test_context_budget_consumes_mode_specific_prompt_and_tools(monkeypatch, tmp
         options,
         runtime,
         identity_context=IdentityContext(user_id="u1"),
-        datasource_context=DatasourceContext(datasource_id="ds_a"),
+        business_context=BusinessContext(values={"datasource_id": "ds_a"}),
     )
     semantic_prompt = chat_data.build_unified_system_prompt(options)
     semantic_budget = ContextRequestBudget(None)
@@ -358,7 +360,7 @@ def test_context_budget_consumes_mode_specific_prompt_and_tools(monkeypatch, tmp
         options,
         runtime,
         identity_context=IdentityContext(user_id="u1"),
-        datasource_context=DatasourceContext(datasource_id="ds_a"),
+        business_context=BusinessContext(values={"datasource_id": "ds_a"}),
     )
     ontology_prompt = chat_data.build_unified_system_prompt(options)
     ontology_budget = ContextRequestBudget(None)

@@ -15,10 +15,11 @@ from utils.logger import get_logger
 from utils.response import business_response
 
 from ..agent.skills.skill_service import skill_service
-from ..schema import SkillImportFromWorkspaceRequest
+from ..schema import ConversationWorkspaceFileSaveRequest, SkillImportFromWorkspaceRequest
 from ..services.agent_run.conversation_workspace import (
     WorkspaceArchiveTooLargeError,
     WorkspaceFileDeleteConflictError,
+    WorkspaceFileSaveConflictError,
     archive_conversation_workspace_directory,
     can_access_conversation_workspace,
     ensure_conversation_workspace,
@@ -32,10 +33,16 @@ from ..services.agent_run.conversation_workspace import (
     delete_conversation_workspace_file as delete_workspace_file_for_conversation,
 )
 from ..services.agent_run.conversation_workspace import (
+    list_conversation_workspace_directories as list_workspace_directories_for_conversation,
+)
+from ..services.agent_run.conversation_workspace import (
     list_conversation_workspace_files as list_workspace_files_for_conversation,
 )
 from ..services.agent_run.conversation_workspace import (
     read_conversation_workspace_file as read_workspace_file_for_conversation,
+)
+from ..services.agent_run.conversation_workspace import (
+    save_conversation_workspace_file as save_workspace_file_for_conversation,
 )
 from ..services.setting_service import get_workspace_size_limit
 from . import BINARY_RESPONSES, JSON_API_RESPONSES
@@ -58,6 +65,14 @@ def _is_internal_workspace_file(path: str) -> bool:
     return normalized in INTERNAL_WORKSPACE_FILE_PATHS
 
 
+def _filter_visible_workspace_directories(directories: list[dict]) -> list[dict]:
+    return [
+        item
+        for item in directories
+        if not _is_internal_workspace_file(str(item.get("relative_path") or item.get("path") or ""))
+    ]
+
+
 def _filter_visible_workspace_files(files: list[dict]) -> list[dict]:
     return [
         item
@@ -77,11 +92,16 @@ async def list_conversation_workspace_files(conversation_id: str, request: Reque
             conversation_id,
             user_id=str(current_user.user_id),
         )
+        directories = await list_workspace_directories_for_conversation(
+            conversation_id,
+            user_id=str(current_user.user_id),
+        )
         limit_mb, limit_bytes = await get_workspace_size_limit()
         used_bytes = sum(int(item.get("size") or 0) for item in files)
         return business_response(
             data={
                 "files": _filter_visible_workspace_files(files),
+                "directories": _filter_visible_workspace_directories(directories),
                 "usage": {
                     "used_bytes": used_bytes,
                     "limit_bytes": limit_bytes,
@@ -166,6 +186,53 @@ async def read_conversation_workspace_file(conversation_id: str, path: str, requ
         )
         return business_response(
             msg="读取工作区文件失败，请稍后重试", code=ErrorCode.CHATDATA_WORKSPACE_FILE_READ_FAILED, status="error"
+        )
+
+
+@router.put("/conversations/{conversation_id}/workspace-files/content")
+async def save_conversation_workspace_file(
+    conversation_id: str,
+    payload: ConversationWorkspaceFileSaveRequest,
+    request: Request,
+) -> JSONResponse:
+    """保存会话工作区中已存在的文本文件。"""
+    try:
+        current_user = _get_current_user(request)
+        if not await can_access_conversation_workspace(conversation_id, str(current_user.user_id)):
+            return business_response(msg="对话不存在或无权访问", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+        if _is_internal_workspace_file(payload.path):
+            return business_response(msg="文件不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+        saved = await save_workspace_file_for_conversation(
+            conversation_id,
+            user_id=str(current_user.user_id),
+            path=payload.path,
+            content=payload.content,
+            expected_mtime=payload.expected_mtime,
+        )
+        return business_response(data={**saved, "saved": True}, msg="保存成功")
+    except HTTPException:
+        raise
+    except WorkspaceFileSaveConflictError as e:
+        return business_response(
+            msg=str(e),
+            code=ErrorCode.CHATDATA_WORKSPACE_FILE_CONFLICT,
+            status="error",
+            http_status_code=http_status.HTTP_409_CONFLICT,
+        )
+    except FileNotFoundError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
+    except ValueError as e:
+        return business_response(msg=str(e), code=ErrorCode.CHATDATA_BAD_REQUEST, status="error")
+    except Exception as e:
+        logger.error(
+            "保存会话工作区文件失败: conversation_id=%s path=%s error=%s",
+            conversation_id,
+            payload.path,
+            e,
+            exc_info=True,
+        )
+        return business_response(
+            msg="保存工作区文件失败，请稍后重试", code=ErrorCode.CHATDATA_WORKSPACE_FILE_SAVE_FAILED, status="error"
         )
 
 

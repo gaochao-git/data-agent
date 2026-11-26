@@ -173,6 +173,20 @@ async def test_agent_question_wait_and_answer_is_atomic(inbox_service):
 
 
 @pytest.mark.asyncio
+async def test_start_run_rejects_task_source_context_missing_required_keys(inbox_service):
+    service, create_thread, _get_session, _owners = inbox_service
+    await create_thread()
+
+    with pytest.raises(ValueError, match="disable_user_interaction"):
+        await service.start_run(
+            "conv-1",
+            "user-1",
+            "用户一",
+            {"task_source": "user", "query": "查询订单"},
+        )
+
+
+@pytest.mark.asyncio
 async def test_finish_run_reports_waiting_user_when_question_already_asked(inbox_service):
     """异常/取消发生在问题落库之后：回报权威状态 waiting_user，队列保持挂载。"""
     service, create_thread, get_session, owners = inbox_service
@@ -636,7 +650,24 @@ async def test_expired_run_stops_and_new_run_adopts_requeued_messages(inbox_serv
     # 调度器不接管过期 active Run
     assert await service.prepare_pending_run(run_id) is None
 
-    # 用户下一次发起会话：旧 Run 就地收口，新 Run 创建并接管退回的消息
+    # 第一次扫描先进入 interrupting，不立即标终态
+    assert await service.reap_expired_runs() == []
+    async with get_session() as session:
+        run = (
+            await session.execute(
+                select(ChatDataAgentInbox).where(
+                    ChatDataAgentInbox.run_id == run_id,
+                    ChatDataAgentInbox.record_type == "run",
+                )
+            )
+        ).scalar_one()
+        assert run.record_status == "interrupting"
+        content = inbox_module.load_run_content(run.record_content)
+        content["reap_deadline_ms"] = 1
+        run.record_content = inbox_module.json.dumps(content, ensure_ascii=False)
+
+    # 宽限期过后 reaper 收口为 interrupted，排队消息退回 pending
+    await service.reap_expired_runs()
     new_run_id, adopted = await service.start_run("conv-1", "user-1", "用户一")
     assert new_run_id != run_id
     assert [message.id for message in adopted] == [message_id]
@@ -649,7 +680,7 @@ async def test_expired_run_stops_and_new_run_adopts_requeued_messages(inbox_serv
                 )
             )
         ).scalar_one()
-    assert old_run.record_status == "failed"
+    assert old_run.record_status == "interrupted"
     assert old_run.owner_token is None
 
 
@@ -673,11 +704,26 @@ async def test_background_reaper_closes_expired_run_and_requeues_messages(inbox_
         ).scalar_one()
         run.lease_expire_time = datetime.now() - timedelta(seconds=1)
 
+    assert await service.reap_expired_runs() == []
+    async with get_session() as session:
+        run = (
+            await session.execute(
+                select(ChatDataAgentInbox).where(
+                    ChatDataAgentInbox.run_id == run_id,
+                    ChatDataAgentInbox.record_type == "run",
+                )
+            )
+        ).scalar_one()
+        assert run.record_status == "interrupting"
+        content = inbox_module.load_run_content(run.record_content)
+        content["reap_deadline_ms"] = 1
+        run.record_content = inbox_module.json.dumps(content, ensure_ascii=False)
+
     results = await service.reap_expired_runs()
 
     assert len(results) == 1
     assert results[0].run_id == run_id
-    assert results[0].status == "failed"
+    assert results[0].status == "interrupted"
     assert results[0].owner_token.startswith("2:")
     async with get_session() as session:
         rows = list(
@@ -691,7 +737,7 @@ async def test_background_reaper_closes_expired_run_and_requeues_messages(inbox_
                 )
             ).scalars()
         )
-    assert rows[0].record_status == "failed"
+    assert rows[0].record_status == "interrupted"
     assert rows[0].owner_token is None
     assert rows[1].message_id == message_id
     assert rows[1].record_status == "pending"
@@ -738,8 +784,22 @@ async def test_expired_run_rejects_steer_and_allows_new_run(inbox_service):
         ).scalar_one()
         run.lease_expire_time = datetime.now() - timedelta(seconds=1)
 
+    assert await service.reap_expired_runs() == []
     with pytest.raises(AgentRunNotActiveError):
         await service.enqueue_message("conv-1", "user-1", "用户一", "恢复后继续处理")
+    async with get_session() as session:
+        run = (
+            await session.execute(
+                select(ChatDataAgentInbox).where(
+                    ChatDataAgentInbox.run_id == run_id,
+                    ChatDataAgentInbox.record_type == "run",
+                )
+            )
+        ).scalar_one()
+        content = inbox_module.load_run_content(run.record_content)
+        content["reap_deadline_ms"] = 1
+        run.record_content = inbox_module.json.dumps(content, ensure_ascii=False)
+    await service.reap_expired_runs()
     new_run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
     assert new_run_id != run_id
 
@@ -1406,7 +1466,7 @@ async def test_agent_inbox_meta_roundtrip_to_human_message(inbox_service):
     await create_thread()
     run_id, _ = await service.start_run("conv-1", "user-1", "用户一")
 
-    meta = {"file_selections": ["workspace/semantic/a__1.yaml"], "file_ids": ["file-1", "file-2"]}
+    meta = {"file_selections": ["workspace/.system/semantic/a__1.yaml"], "file_ids": ["file-1", "file-2"]}
     with_meta_id = await service.enqueue_message(
         "conv-1",
         "user-1",
@@ -1482,3 +1542,49 @@ async def test_has_active_run_reflects_run_lifecycle(inbox_service):
     assert await service.has_active_run("conv-1", "user-1") is True
     await service.complete_run(run_id, "user-1", "用户一", owners[run_id])
     assert await service.has_active_run("conv-1", "user-1") is False
+
+
+@pytest.mark.asyncio
+async def test_stale_pending_run_expires_instead_of_being_claimed(inbox_service, monkeypatch):
+    """pending 超过最大等待时间后失败收口，不能被后续节点延迟领取执行。"""
+    service, create_thread, get_session, _owners = inbox_service
+    await create_thread()
+    run_id, _adopted = await service.start_run("conv-1", "user-1", "用户一")
+
+    async with get_session() as session:
+        run = (
+            await session.execute(
+                select(ChatDataAgentInbox).where(
+                    ChatDataAgentInbox.run_id == run_id,
+                    ChatDataAgentInbox.record_type == "run",
+                )
+            )
+        ).scalar_one()
+        run.record_status = "pending"
+        run.owner_token = None
+        run.lease_expire_time = None
+        run.create_time = datetime.now() - timedelta(seconds=301)
+        run.update_time = run.create_time
+
+    async def fake_setting(key, default=None):
+        if key == "CHAT_DATA_PENDING_RUN_MAX_AGE_SECONDS":
+            return 300
+        return default
+
+    monkeypatch.setattr(inbox_module, "get_runtime_setting", fake_setting)
+
+    assert await service.prepare_pending_run(run_id) is None
+
+    async with get_session() as session:
+        rows = list(
+            (
+                await session.execute(
+                    select(ChatDataAgentInbox)
+                    .where(ChatDataAgentInbox.run_id == run_id)
+                    .order_by(ChatDataAgentInbox.id)
+                )
+            ).scalars()
+        )
+    assert rows[0].record_status == "failed"
+    assert rows[0].owner_token is None
+    assert all(row.record_status == "cancelled" for row in rows[1:] if row.record_type == "message")

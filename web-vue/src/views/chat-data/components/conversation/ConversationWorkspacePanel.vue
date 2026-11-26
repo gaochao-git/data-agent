@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 会话右侧面板：工作区文件 tab + 工具详情 tab。
+ * 会话右侧面板：管理首页 → 文件管理 / 子智能体管理 → 任务或工具详情 tab。
  *
  * 从 conversation/Conversation.vue 拆出（原 900 行面板逻辑 + 385 行模板）。职责边界：
  * - 文件列表/树/预览（文本、JSON 表格、图表、Markdown、HTML、PDF、图片、Office、YAML）；
@@ -15,17 +15,34 @@
  */
 import { computed, nextTick, onMounted, onUnmounted, provide, ref, watch } from 'vue'
 import type { PropType } from 'vue'
-import type { ChatDataTokenUsage } from '../../types'
+import type { ChatDataTokenUsage, ExecutionTargetOption } from '../../types'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import type { SemanticYamlFile, ToolCallInfo } from '../../types'
+import type { SemanticYamlFile, SubagentTaskRecord, ToolCallInfo } from '../../types'
 import ConversationSidePanel from './ConversationSidePanel.vue'
 import ToolCallDetailPanel from './ToolCallDetailPanel.vue'
 import AgentProcessView from './AgentProcessView.vue'
+import SubagentTaskProcessView from './SubagentTaskProcessView.vue'
+import SubagentManagerTab from './SubagentManagerTab.vue'
+import RightSidebarHome from './RightSidebarHome.vue'
 import RightSidebarTabStrip from './RightSidebarTabStrip.vue'
 import FileManagerTab from './FileManagerTab.vue'
 import FilePreviewTab from './FilePreviewTab.vue'
 import { WorkspaceFilesContextKey } from '../../composables/workspaceFilesContext'
-import { useRightSidebarTabs, WORKSPACE_TAB_ID, type RightSidebarTab } from '../../composables/useRightSidebarTabs'
+import {
+  HOME_TAB_ID,
+  SUBAGENT_MANAGER_TAB_ID,
+  WORKSPACE_TAB_ID,
+  useRightSidebarTabs,
+  type RightSidebarTab,
+} from '../../composables/useRightSidebarTabs'
+import {
+  groupSubagentTaskSessions,
+  isSubagentTaskActive,
+  mergeSubagentTasks,
+  subagentSessionCompactionCount,
+  subagentTaskCompactionCount,
+  subagentTaskSessionId,
+} from '../../composables/useSubagentTasks'
 import {
   deleteConversationWorkspaceFile,
   getConversationWorkspaceFileContent,
@@ -33,7 +50,9 @@ import {
   getConversationWorkspaceOfficeHtmlPreview,
   getConversationWorkspaceRawFile,
   getConversationWorkspaceArchive,
+  saveConversationWorkspaceFile,
   uploadFile,
+  type ConversationWorkspaceDirectory,
   type ConversationWorkspaceFile,
   type ConversationWorkspaceUsage,
 } from '../../api'
@@ -59,7 +78,8 @@ import { evictWorkspaceFileCache } from '../../utils/workspacePreviewCache'
 import { IMAGE_PREVIEW_EXTENSIONS, IMAGE_PREVIEW_MIME, OFFICE_HTML_PREVIEW_EXTENSIONS, isBinaryPreviewPath } from '../../utils'
 import { formatToolTableCell, parseChartSpecValue, replaceVisiblePathsForDisplay } from '../../utils/messageArtifacts'
 import ConversationTokenUsage from './ConversationTokenUsage.vue'
-import { extractChangedFilePathsFromResult, extractWrittenFilePathCandidates } from '../../utils/toolDisplay'
+import { extractChangedFilePathsFromResult, extractWrittenFilePathCandidates, getSubagentDispatchArgs, isSubagentDisplayToolName } from '../../utils/toolDisplay'
+import { resolveSubagentContextUsage } from '../../utils/subagentUsage'
 import { ACCEPTED_FILE_TYPES, MAX_FILE_SIZE } from '../../utils/uploadLimits'
 
 const props = defineProps({
@@ -70,11 +90,33 @@ const props = defineProps({
   resolveToolCall: { type: Function as PropType<(toolCallId: string) => ToolCallInfo | null>, default: null },
   /** Run 执行中禁用删除（沙箱回写冲突），与父级 runBusy 同源 */
   runBusy: { type: Boolean, default: false },
+  /** 子智能体过程里的查询结果保存到看板：与主对话同一回调与数据源上下文 */
+  datasourceId: { type: String, default: '' },
+  executionTargets: { type: Array as PropType<ExecutionTargetOption[]>, default: () => [] },
+  onSave: { type: Function as PropType<(sql: string, chartType: string, memberDatasourceId?: string, memberDatasourceIds?: string[]) => void>, default: undefined },
   /** 是否显示「导入为语义模型」行操作（管理员权限，与配置入口同源） */
   canImportSemanticModel: { type: Boolean, default: false },
   formatText: { type: Function as PropType<(value: string) => string>, default: (value: string) => value },
   /** 面板内上传需要新建会话时调用；创建成功后父级负责同步会话状态 */
   ensureConversationId: { type: Function as PropType<() => Promise<string | null>>, default: null },
+  /** Office 预览划选「引用选中内容」：父级把标注收进输入框，随下一条消息发送 */
+  documentAnnotationHandler: { type: Function as PropType<(payload: {
+    filePath: string
+    docPath: string
+    quote: string
+    comment: string
+  }) => void>, default: null },
+  /** 与浮层文本框共享的对话草稿；在浮层中编辑时回写主输入框。 */
+  documentAnnotationDraft: { type: String, default: '' },
+  documentAnnotationDraftHandler: { type: Function as PropType<(value: string) => void>, default: null },
+  /** 会话子智能体任务列表；任务详情 tab 从这里取标题/状态，完整报告由 loadSubagentTaskDetail 拉取。 */
+  subagentTasks: { type: Array as PropType<SubagentTaskRecord[]>, default: () => [] },
+  subagentTaskDetails: { type: Object as PropType<Record<string, SubagentTaskRecord>>, default: () => ({}) },
+  subagentTaskCancellingIds: { type: Array as PropType<string[]>, default: () => [] },
+  subagentTaskClosingIds: { type: Array as PropType<string[]>, default: () => [] },
+  loadSubagentTaskDetail: { type: Function as PropType<(taskId: string, refresh?: boolean) => Promise<SubagentTaskRecord | null>>, default: null },
+  cancelSubagentTask: { type: Function as PropType<(task: SubagentTaskRecord) => Promise<void>>, default: null },
+  closeSubagentSession: { type: Function as PropType<(task: SubagentTaskRecord) => Promise<void>>, default: null },
 })
 
 const emit = defineEmits<{
@@ -91,12 +133,16 @@ const {
   tabs: panelTabs,
   activeTabId: activePanelTabId,
   activeTab: activePanelTab,
+  isHomeTabActive,
   isWorkspaceTabActive,
+  isSubagentManagerTabActive,
   isToolTabActive,
   displayToolTab,
   selectTab,
   activateTab,
+  activateHome,
   activateWorkspace,
+  activateSubagentManager,
   closeTab,
   rememberScroll,
   scrollTopFor,
@@ -105,46 +151,135 @@ const {
 
 const sidePanelRef = ref<InstanceType<typeof ConversationSidePanel> | null>(null)
 
+// 最近一次点击打开的工具对象。内层工具只存在于任务详情 trail，父级按 id
+// 可能解析不到；此时直接以打开 tab 时拿到的对象为准，避免详情页空白。
+const openedToolCalls = new Map<string, ToolCallInfo>()
+
 const toolCallForTab = (tab: RightSidebarTab | null | undefined): ToolCallInfo | null => {
   const toolCallId = tab?.toolCallId
   if (!toolCallId) return null
   const resolved = props.resolveToolCall?.(toolCallId)
   if (resolved) return resolved
-  return props.activeToolCall?.tool_call_id === toolCallId ? props.activeToolCall : null
+  if (props.activeToolCall?.tool_call_id === toolCallId) return props.activeToolCall
+  return openedToolCalls.get(toolCallId) || null
 }
 
 const displayToolCall = computed(() => toolCallForTab(displayToolTab.value))
 const displayTabIsAgentProcess = computed(() => displayToolTab.value?.kind === 'agentProcess')
 const displayTabIsToolDetail = computed(() => displayToolTab.value?.kind === 'tool')
+const displayTabIsSubagentTask = computed(() => displayToolTab.value?.kind === 'subagentTask')
 // 每个子智能体 tab 各渲染一份过程视图（v-for 常驻）：多开时内容不串、展开态与位置各自保留
 const agentProcessTabs = computed(() => panelTabs.value.filter(tab => tab.kind === 'agentProcess'))
+const subagentTaskTabs = computed(() => panelTabs.value.filter(tab => tab.kind === 'subagentTask'))
+const allSubagentTasks = computed(() => mergeSubagentTasks(props.subagentTasks, Object.values(props.subagentTaskDetails)))
+const subagentSessions = computed(() => groupSubagentTaskSessions(allSubagentTasks.value))
+const subagentSessionCount = computed(() => subagentSessions.value.length)
 
-/** 选中 task 调用时，工具视图额外展示「完整过程」（与主对话共用同一套消息/工具组件） */
+const subagentTaskForTab = (tab: RightSidebarTab | null | undefined): SubagentTaskRecord | null => {
+  const taskId = tab?.taskId
+  if (!taskId) return null
+  const current = props.subagentTaskDetails[taskId] || props.subagentTasks.find(task => task.task_id === taskId) || null
+  if (!current) return null
+  const sessionId = subagentTaskSessionId(current)
+  return subagentSessions.value.find(session => session.sessionId === sessionId)?.latestTask || current
+}
+const subagentTasksForTab = (tab: RightSidebarTab | null | undefined): SubagentTaskRecord[] => {
+  const task = subagentTaskForTab(tab)
+  if (!task) return []
+  const sessionId = subagentTaskSessionId(task)
+  return subagentSessions.value.find(session => session.sessionId === sessionId)?.tasks || [task]
+}
+const displaySubagentTask = computed(() => subagentTaskForTab(displayToolTab.value))
+// 运行中任务来自详情 SSE 的实时占用；列表快照不含 result_meta，不能作为顶部唯一来源
+const liveSubagentTaskUsage = ref<Record<string, ChatDataTokenUsage>>({})
+const subagentTaskStatusIcon = (task: SubagentTaskRecord): string => {
+  switch (task.status) {
+    case 'pending': return 'fa-clock'
+    case 'running': return 'fa-spinner fa-spin'
+    case 'cancelling': return 'fa-circle-notch fa-spin'
+    case 'waiting_approval': return 'fa-user-clock'
+    case 'completed': return 'fa-check'
+    case 'failed': return 'fa-xmark'
+    case 'cancelled': return 'fa-ban'
+    case 'timeout': return 'fa-hourglass-end'
+    case 'interrupted': return 'fa-circle-exclamation'
+    case 'lost': return 'fa-link-slash'
+    default: return 'fa-circle'
+  }
+}
+const subagentTaskStatusTone = (task: SubagentTaskRecord): string => {
+  if (task.status === 'waiting_approval') return 'border-amber-200 bg-amber-50 text-amber-700'
+  if (isSubagentTaskActive(task)) return 'border-sky-200 bg-sky-50 text-sky-700'
+  if (task.status === 'completed') return 'border-emerald-200 bg-emerald-50 text-emerald-700'
+  if (task.status === 'failed' || task.status === 'timeout' || task.status === 'lost') {
+    return 'border-rose-200 bg-rose-50 text-rose-600'
+  }
+  return 'border-slate-200 bg-slate-50 text-slate-600'
+}
+const displaySubagentTaskUsage = computed<ChatDataTokenUsage | null>(() => {
+  const task = displaySubagentTask.value
+  if (!task) return null
+  if (isSubagentTaskActive(task)) {
+    const live = liveSubagentTaskUsage.value[task.task_id]
+    if (live) return live
+  }
+  const meta = task.result_meta
+  return resolveSubagentContextUsage(
+    meta?.subagent_context_usage || task.progress?.context_usage,
+    meta?.subagent_token_usage_detail,
+  )
+})
+const displaySubagentTaskCancellable = computed(() => {
+  const task = displaySubagentTask.value
+  return Boolean(task && isSubagentTaskActive(task) && props.cancelSubagentTask)
+})
+const displaySubagentTaskCancelling = computed(() => {
+  const task = displaySubagentTask.value
+  return Boolean(task && (props.subagentTaskCancellingIds.includes(task.task_id) || task.status === 'cancelling'))
+})
+const handleSubagentTaskUsageUpdated = (taskId: string, usage: ChatDataTokenUsage | null) => {
+  if (usage) {
+    liveSubagentTaskUsage.value = { ...liveSubagentTaskUsage.value, [taskId]: usage }
+    return
+  }
+  if (!liveSubagentTaskUsage.value[taskId]) return
+  const next = { ...liveSubagentTaskUsage.value }
+  delete next[taskId]
+  liveSubagentTaskUsage.value = next
+}
+const displaySubagentTaskCompactions = computed(
+  () => displaySubagentTask.value?.result_meta?.subagent_compactions || [],
+)
+const displaySubagentTaskSessionTasks = computed(() => subagentTasksForTab(displayToolTab.value))
+const displaySubagentTaskCompactionCount = computed(
+  () => subagentSessionCompactionCount(displaySubagentTaskSessionTasks.value),
+)
+const displaySubagentTaskCompactionTurns = computed(() => displaySubagentTaskSessionTasks.value
+  .map((task, index) => ({
+    turn: Math.max(Number(task.turn_index) || index + 1, 1),
+    count: subagentTaskCompactionCount(task),
+  }))
+  .filter(item => item.count > 0))
+
+/** 选中 subagent 调用时，工具视图额外展示「完整过程」（与主对话共用同一套消息/工具组件） */
 const subagentTaskCall = computed(() => {
   const toolCall = displayToolCall.value
-  return toolCall?.tool_name === 'task' && (toolCall.subagentTrail?.length ?? 0) > 0 ? toolCall : null
+  if (!toolCall) return null
+  return isSubagentDisplayToolName(toolCall.tool_name) && (toolCall.subagentTrail?.length ?? 0) > 0 ? toolCall : null
 })
 
 /** 切换 tab：保存旧 tab 滚动位置、按需恢复新 tab 内容/位置（滚动读写由本组件持有）。 */
-// 复用主对话的上下文占用组件：有计量明细直接用明细；旧会话/首轮前用快照兜底，保证点击能打开同样面版
+// 复用主对话的上下文占用组件：上下文快照定百分比，计量明细只补充明细字段。
 const subagentUsageForPanel = computed<ChatDataTokenUsage | null>(() => {
-  const detail = subagentTaskCall.value?.subagentTokenUsageDetail
-  if (detail) return detail
-  const snapshot = subagentTaskCall.value?.subagentContextUsage
-  if (!snapshot) return null
-  return {
-    used: snapshot.used_tokens,
-    total: snapshot.context_window ?? snapshot.threshold_tokens,
-    percentage: snapshot.percent,
-    current_input_tokens: snapshot.used_tokens,
-    compression_trigger_tokens: snapshot.threshold_tokens,
-    context_window: snapshot.context_window,
-    estimated: true,
-  }
+  return resolveSubagentContextUsage(
+    subagentTaskCall.value?.subagentContextUsage,
+    subagentTaskCall.value?.subagentTokenUsageDetail,
+  )
 })
 
-const selectPanelTab = (tabId: string) => {
+const selectPanelTab = (tabId: string, fromTabStrip = false) => {
   const previousTabId = activePanelTabId.value
+  const isSameActiveTab = tabId === previousTabId
   if (tabId !== previousTabId) rememberScroll(previousTabId, sidePanelRef.value?.getBodyScrollTop() ?? 0)
   const tab = panelTabs.value.find(item => item.id === tabId)
   // 文件 tab 各自持有路径：切回某个文件 tab 时恢复它的内容
@@ -152,20 +287,36 @@ const selectPanelTab = (tabId: string) => {
     selectConsoleFile(tab.path)
     void loadWorkspaceFileContent(props.conversationId, tab.path)
   }
+  if (tab?.kind === 'subagentTask' && tab.taskId) {
+    for (const task of subagentTasksForTab(tab)) {
+      void props.loadSubagentTaskDetail?.(task.task_id)
+    }
+  }
   selectTab(tabId)
   emit('update:open', true)
   void nextTick(() => {
     const sidePanel = sidePanelRef.value
     if (!sidePanel) return
+    // 从 tab 条重复点击当前项只重新聚焦：不打断用户正在阅读的位置；
+    // 业务入口（工具卡 / 管理页）即使激活的是同一个 tab 仍按首次打开处理。
+    if (fromTabStrip && isSameActiveTab && props.open) return
     const savedTop = scrollTopFor(tabId)
-    const followActive = isToolTabActive.value && toolViewMode.value === 'agent' && Boolean(subagentTaskCall.value)
-    // 首次打开跟随型 tab → 停在最新；切回已有 tab → 恢复上次位置
-    if (savedTop === undefined && followActive) {
+    // 首次打开过程类 tab（前台子智能体 / 后台任务详情）→ 停在最新；
+    // 切回已有 tab → 恢复上次位置，由上翻/回到底部决定是否继续跟随
+    if (savedTop === undefined && panelAutoFollow.value) {
       sidePanel.scrollBodyToBottom()
       return
     }
     sidePanel.setBodyScrollTop(savedTop ?? 0)
   })
+}
+
+const selectPanelTabFromStrip = (tabId: string) => selectPanelTab(tabId, true)
+
+/** 业务入口会先激活再走 selectPanelTab，旧 tab 的阅读位置需要在这里先落账。 */
+const rememberActivePanelScroll = () => {
+  if (!props.open) return
+  rememberScroll(activePanelTabId.value, sidePanelRef.value?.getBodyScrollTop() ?? 0)
 }
 
 const closePanelTab = (tabId: string) => {
@@ -174,14 +325,60 @@ const closePanelTab = (tabId: string) => {
   if (fallbackId) selectPanelTab(fallbackId)
 }
 
+const openHomePanelTab = () => {
+  rememberActivePanelScroll()
+  activateHome()
+  selectPanelTab(HOME_TAB_ID)
+}
+
 const openWorkspacePanelTab = () => {
-  void activateWorkspace()
+  rememberActivePanelScroll()
+  activateWorkspace()
   selectPanelTab(WORKSPACE_TAB_ID)
 }
 
+const openSubagentManagerPanelTab = () => {
+  rememberActivePanelScroll()
+  activateSubagentManager()
+  selectPanelTab(SUBAGENT_MANAGER_TAB_ID)
+}
+
+const cancelSubagentTaskFromManager = (task: SubagentTaskRecord) => {
+  void props.cancelSubagentTask?.(task)
+}
+
+const cancelDisplaySubagentTask = () => {
+  const task = displaySubagentTask.value
+  if (!task || !isSubagentTaskActive(task)) return
+  cancelSubagentTaskFromManager(task)
+}
+
+const closeSubagentSessionFromManager = (task: SubagentTaskRecord) => {
+  void props.closeSubagentSession?.(task)
+}
+
+const findSubagentTaskByToolCall = (toolCallId: string): SubagentTaskRecord | null => {
+  const listed = props.subagentTasks.find(task => task.parent_tool_call_id === toolCallId)
+  if (listed) return listed
+  return Object.values(props.subagentTaskDetails).find(task => task.parent_tool_call_id === toolCallId) || null
+}
+
 const openToolPanelTab = (toolCall: ToolCallInfo) => {
-  const isTask = toolCall.tool_name === 'task' && (toolCall.subagentTrail?.length ?? 0) > 0
-  const subagentType = typeof toolCall.args?.subagent_type === 'string' ? toolCall.args.subagent_type.trim() : ''
+  openedToolCalls.set(toolCall.tool_call_id, toolCall)
+  // subagent 调用的工具结果只是「已开始/已结束」，真正过程与报告在任务账本里；
+  // 能按 parent_tool_call_id 找到任务时直接进任务详情页（与「子智能体管理」
+  // 同一个页面），避免同步与异步出现两套展示。
+  if (isSubagentDisplayToolName(toolCall.tool_name)) {
+    const task = findSubagentTaskByToolCall(toolCall.tool_call_id)
+    if (task) {
+      openSubagentTaskPanelTab(task)
+      return
+    }
+  }
+  const isTask = isSubagentDisplayToolName(toolCall.tool_name) && (toolCall.subagentTrail?.length ?? 0) > 0
+  const dispatchArgs = getSubagentDispatchArgs(toolCall.tool_name, toolCall.args || {})
+  const subagentType = typeof dispatchArgs?.subagent_type === 'string' ? dispatchArgs.subagent_type.trim() : ''
+  rememberActivePanelScroll()
   activateTab({
     id: `${isTask ? 'agent' : 'tool'}:${toolCall.tool_call_id}`,
     kind: isTask ? 'agentProcess' : 'tool',
@@ -193,31 +390,69 @@ const openToolPanelTab = (toolCall: ToolCallInfo) => {
 
 const openFilePanelTab = (path: string) => {
   const fileName = path.split('/').pop() || path
+  rememberActivePanelScroll()
   activateTab({ id: `file:${path}`, kind: 'file', title: fileName, path })
   selectPanelTab(`file:${path}`)
 }
 
+/** 子智能体任务独立 tab：同一子会话只保留一个 tab，追问时切到最新一轮。 */
+const openSubagentTaskPanelTab = (task: SubagentTaskRecord) => {
+  const sessionId = subagentTaskSessionId(task)
+  const sessionRoot = props.subagentTasks.find(item => item.task_id === sessionId)
+    || props.subagentTaskDetails[sessionId]
+  const tabId = `subagent-task:${sessionId}`
+  rememberActivePanelScroll()
+  activateTab({
+    id: tabId,
+    kind: 'subagentTask',
+    title: sessionRoot?.label?.trim() || task.label || task.description || '子智能体任务',
+    taskId: task.task_id,
+  })
+  selectPanelTab(tabId)
+}
+
 /**
- * 工具详情 tab 的展示方式（仅子智能体 task 调用可选）：
+ * 工具详情 tab 的展示方式（仅子智能体调用可选）：
  * - agent：智能体模式，按聊天记录复用主对话消息组件；
  * - generic：通用模式，与普通工具一致，只看参数与结果。
  * 两种模式互斥渲染，不堆叠。
  */
 const toolViewMode = ref<'agent' | 'generic'>('agent')
 
-watch(() => displayToolCall.value?.tool_call_id, () => {
-  // 每次选中新的子智能体任务默认回到聊天方式；普通工具不涉及该状态
-  if (subagentTaskCall.value) toolViewMode.value = 'agent'
-})
+/** 过程类 tab 是否开启贴底跟随：后台任务详情始终跟随；前台子智能体按聊天模式跟随。 */
+const panelAutoFollow = computed(() => (
+  isToolTabActive.value
+  && toolViewMode.value === 'agent'
+  && (
+    displayTabIsSubagentTask.value
+    || Boolean(subagentTaskCall.value)
+  )
+))
+
+watch(
+  [() => displayToolCall.value?.tool_call_id, () => displaySubagentTask.value?.task_id],
+  () => {
+    // 每次选中新的子智能体任务默认回到聊天方式；普通工具不涉及该状态
+    if (subagentTaskCall.value || displaySubagentTask.value) toolViewMode.value = 'agent'
+  },
+)
 
 const selectedConsoleFilePath = ref<string | null>(null)
 // 默认只收起 uploads / workspace，outputs 保持展开——理由见 consoleFileTree.ts 里的常量注释。
 const collapsedConsoleDirectories = ref<Set<string>>(new Set(DEFAULT_COLLAPSED_CONSOLE_DIRECTORIES))
 const consoleFilePreviewMode = ref<'render' | 'table' | 'source'>('render')
 const workspaceFiles = ref<ConversationWorkspaceFile[]>([])
+const workspaceDirectories = ref<ConversationWorkspaceDirectory[]>([])
 const workspaceUsage = ref<ConversationWorkspaceUsage>({ used_bytes: 0, limit_bytes: 0, limit_mb: 0, percentage: 0 })
 const workspaceFileContents = ref<Record<string, string>>({})
+const workspaceFileContentMtimes = ref<Record<string, number>>({})
 const workspaceFileBlobs = ref<Record<string, { url: string; arrayBuffer: ArrayBuffer; ext: string; mime: string; error?: boolean }>>({})
+const workspaceFileEditorPath = ref<string | null>(null)
+const workspaceFileEditorDraft = ref('')
+const workspaceFileEditorSaving = ref(false)
+const workspaceFileEditorBaseMtime = ref<number | null>(null)
+// 文本预览源上限 5MB，但超过 1MB 的文本只渲染截断副本；截断副本绝不能回存覆盖完整文件。
+const CONSOLE_TEXT_RENDER_MAX_CHARS = 1 * 1024 * 1024
 const workspaceFilePreviewRef = ref<HTMLElement | null>(null)
 const isWorkspaceFilePreviewFullscreen = ref(false)
 const selectedConsoleOfficeHtml = ref<string | null>(null)
@@ -251,7 +486,7 @@ const SHOW_CONSOLE_EMPTY_STATE = false
 const SHOW_CONSOLE_FILE_PLACEHOLDER = false
 
 const producedFiles = computed<ProducedFile[]>(() => buildProducedFiles(workspaceFiles.value))
-const producedFileTree = computed(() => buildProducedFileTree(producedFiles.value))
+const producedFileTree = computed(() => buildProducedFileTree(producedFiles.value, workspaceDirectories.value))
 
 
 // 工作区 tab 不再在头部重复显示根路径——文件树根节点已经写着同一个路径，
@@ -304,6 +539,26 @@ const toggleConsoleTreeCollapsed = () => {
     : collapseAllDirectories(paths, collapsedConsoleDirectories.value)
 }
 
+// 二级及更深目录首次出现时默认折叠：展开 workspace 只显示直接子目录，
+// 不会把 semantic/月报 等整棵子树一次性摊开。用户手动展开后不再自动收起。
+const knownNestedDirectories = new Set<string>()
+watch(
+  producedFileTree,
+  (tree) => {
+    const nestedPaths = collectCollapsibleDirectoryPaths(tree.directories).filter(path => path.includes('/'))
+    const next = new Set(collapsedConsoleDirectories.value)
+    let changed = false
+    nestedPaths.forEach((path) => {
+      if (knownNestedDirectories.has(path)) return
+      knownNestedDirectories.add(path)
+      next.add(path)
+      changed = true
+    })
+    if (changed) collapsedConsoleDirectories.value = next
+  },
+  { immediate: true },
+)
+
 const selectConsoleFile = (path: string) => {
   const normalizedPath = normalizeVisiblePath(path)
   if (!normalizedPath) return
@@ -349,9 +604,8 @@ watch(() => props.open, (open) => {
   void nextTick(() => {
     const sidePanel = sidePanelRef.value
     if (!sidePanel) return
-    const followActive = isToolTabActive.value && toolViewMode.value === 'agent' && Boolean(subagentTaskCall.value)
     const savedTop = scrollTopFor(activePanelTabId.value)
-    if (savedTop === undefined && followActive) {
+    if (savedTop === undefined && panelAutoFollow.value) {
       sidePanel.scrollBodyToBottom()
       return
     }
@@ -370,10 +624,15 @@ onUnmounted(() => {
 const loadWorkspaceFiles = async (conversationId: string | null | undefined) => {
   if (!conversationId) {
     workspaceFiles.value = []
+    workspaceDirectories.value = []
     workspaceUsage.value = { used_bytes: 0, limit_bytes: 0, limit_mb: 0, percentage: 0 }
     Object.values(workspaceFileBlobs.value).forEach(b => { if (b.url) URL.revokeObjectURL(b.url) })
     workspaceFileBlobs.value = {}
     workspaceFileContents.value = {}
+    workspaceFileContentMtimes.value = {}
+    workspaceFileEditorPath.value = null
+    workspaceFileEditorDraft.value = ''
+    workspaceFileEditorBaseMtime.value = null
     officePreviewCache.value = {}
     selectedConsoleOfficeHtml.value = null
     selectedConsoleOfficePreviewReason.value = null
@@ -385,10 +644,12 @@ const loadWorkspaceFiles = async (conversationId: string | null | undefined) => 
     const response = await getConversationWorkspaceFiles(conversationId)
     if (conversationId !== props.conversationId) return
     workspaceFiles.value = response.data?.files || []
+    workspaceDirectories.value = response.data?.directories || []
     if (response.data?.usage) workspaceUsage.value = response.data.usage
   } catch (err) {
     if (conversationId !== props.conversationId) return
     workspaceFiles.value = []
+    workspaceDirectories.value = []
     console.error('加载智能分析工作区文件失败:', err)
   } finally {
     if (conversationId === props.conversationId) {
@@ -428,10 +689,6 @@ const capWorkspaceTextPreview = (content: string) => {
 type WorkspaceFileLoadOptions = {
   forceReload?: boolean
 }
-
-// 文本预览渲染上限：后端文本预览源上限为 5MB，但超大文本全量进 DOM（JSON 还要 parse+stringify）会卡死页面，
-// 超限只渲染前 1MB 并提示下载查看（对齐 Office 预览「源 50MB / 渲染 12MB」的双层设计）。
-const CONSOLE_TEXT_RENDER_MAX_CHARS = 1 * 1024 * 1024
 
 const loadWorkspaceFileContent = async (
   conversationId: string | null | undefined,
@@ -486,6 +743,10 @@ const loadWorkspaceFileContent = async (
       ...workspaceFileContents.value,
       [path]: capWorkspaceTextPreview(response.data?.content || ''),
     }
+    workspaceFileContentMtimes.value = {
+      ...workspaceFileContentMtimes.value,
+      [path]: Number(response.data?.mtime || 0),
+    }
   } catch (err) {
     if (!isCurrentWorkspaceFilePreviewRequest(conversationId, path, requestSequence)) return
     if (!options.forceReload || workspaceFileContents.value[path] === undefined) {
@@ -493,6 +754,9 @@ const loadWorkspaceFileContent = async (
         ...workspaceFileContents.value,
         [path]: '文件内容加载失败。',
       }
+      const nextMtimes = { ...workspaceFileContentMtimes.value }
+      delete nextMtimes[path]
+      workspaceFileContentMtimes.value = nextMtimes
     }
     console.error('加载智能分析工作区文件内容失败:', err)
   } finally {
@@ -500,6 +764,116 @@ const loadWorkspaceFileContent = async (
       loadingWorkspaceFilePath.value = null
       loadingWorkspaceFileSequence.value = null
     }
+  }
+}
+
+const isWorkspaceFileEditing = computed(() => (
+  Boolean(workspaceFileEditorPath.value)
+  && workspaceFileEditorPath.value === selectedConsoleFilePath.value
+))
+
+const isWorkspaceFileDirty = computed(() => (
+  isWorkspaceFileEditing.value
+  && workspaceFileEditorDraft.value !== (workspaceFileContents.value[workspaceFileEditorPath.value || ''] ?? '')
+))
+
+const canEditSelectedWorkspaceFile = computed(() => {
+  const path = selectedConsoleFilePath.value
+  const file = selectedWorkspaceFile.value
+  if (!path || !file) return false
+  const editableRoot = ['workspace/', 'outputs/', 'memory/'].some(prefix => path.startsWith(prefix))
+  if (!editableRoot || path.startsWith('workspace/.system/') || props.runBusy) return false
+  if (isBinaryPreviewPath(path) || file.size > CONSOLE_TEXT_RENDER_MAX_CHARS) return false
+  if (loadingWorkspaceFilePath.value === path || isWorkspaceRefreshBusy.value) return false
+  return workspaceFileContentMtimes.value[path] !== undefined
+})
+
+const startWorkspaceFileEdit = () => {
+  const path = selectedConsoleFilePath.value
+  if (!path || !canEditSelectedWorkspaceFile.value) {
+    ElMessage.warning('当前文件暂不支持编辑')
+    return
+  }
+  const baseMtime = workspaceFileContentMtimes.value[path]
+  if (baseMtime === undefined) {
+    ElMessage.warning('文件版本信息缺失，请刷新后重试')
+    return
+  }
+  workspaceFileEditorPath.value = path
+  workspaceFileEditorDraft.value = workspaceFileContents.value[path] ?? ''
+  workspaceFileEditorBaseMtime.value = baseMtime
+  consoleFilePreviewMode.value = 'source'
+}
+
+const cancelWorkspaceFileEdit = async () => {
+  if (workspaceFileEditorSaving.value) return
+  if (isWorkspaceFileDirty.value) {
+    try {
+      await ElMessageBox.confirm('放弃尚未保存的修改？', '取消编辑', {
+        confirmButtonText: '放弃',
+        cancelButtonText: '继续编辑',
+        type: 'warning',
+      })
+    } catch {
+      return
+    }
+  }
+  workspaceFileEditorPath.value = null
+  workspaceFileEditorDraft.value = ''
+  workspaceFileEditorBaseMtime.value = null
+}
+
+const saveWorkspaceFileEdit = async () => {
+  const conversationId = props.conversationId
+  const path = workspaceFileEditorPath.value
+  if (!conversationId || !path || workspaceFileEditorSaving.value) return
+  if (!isWorkspaceFileDirty.value) {
+    await cancelWorkspaceFileEdit()
+    return
+  }
+  const expectedMtime = workspaceFileEditorBaseMtime.value
+  if (expectedMtime === null) {
+    ElMessage.warning('文件版本信息缺失，请刷新后重试')
+    return
+  }
+
+  workspaceFileEditorSaving.value = true
+  try {
+    const response = await saveConversationWorkspaceFile(
+      conversationId,
+      path,
+      workspaceFileEditorDraft.value,
+      expectedMtime,
+    )
+    if (response.status !== 'success') {
+      ElMessage.error(response.msg || '保存失败')
+      return
+    }
+    const nextContent = workspaceFileEditorDraft.value
+    const nextMtime = Number(response.data?.mtime || expectedMtime)
+    const nextBytes = Number(response.data?.bytes || new TextEncoder().encode(nextContent).length)
+    workspaceFileContents.value = {
+      ...workspaceFileContents.value,
+      [path]: capWorkspaceTextPreview(nextContent),
+    }
+    workspaceFileContentMtimes.value = {
+      ...workspaceFileContentMtimes.value,
+      [path]: nextMtime,
+    }
+    workspaceFiles.value = workspaceFiles.value.map((file) => (
+      normalizeVisiblePath(file.relative_path || file.path) === path
+        ? { ...file, size: nextBytes, mtime: nextMtime }
+        : file
+    ))
+    workspaceFileEditorPath.value = null
+    workspaceFileEditorDraft.value = ''
+    workspaceFileEditorBaseMtime.value = null
+    consoleFilePreviewMode.value = 'render'
+    ElMessage.success(path === 'memory/memory.md' ? '记忆已保存，下一轮对话生效' : '文件已保存')
+  } catch (err) {
+    console.error('保存会话记忆文件失败:', err)
+  } finally {
+    workspaceFileEditorSaving.value = false
   }
 }
 
@@ -799,13 +1173,15 @@ const handleCopyWorkspacePreviewPath = () => {
 
 // 工作区里的文件（uploads / workspace / outputs）都可直接下载，不依赖智能体是否调用过展示工具。
 // 后端 raw 接口对三个目录一视同仁，此前的 outputs 限制只是前端产品决策，已放开。
-// SQL 查询结果与工具结果卸载缓存除外——见 utils/consoleFileTree.ts 的下载白名单说明。
+// .system 下的文件也一律可下载（含 SQL 查询结果与工具卸载缓存），后端 raw 接口按会话鉴权；
+// 仅删除与目录打包仍被拦截，见 utils/consoleFileTree.ts 的 SYSTEM_RESULT_WORKSPACE_PREFIXES。
+// 下面的 isWorkspaceFileDownloadable 只在拿不到路径时返回 false，起保守兜底作用。
 // file 由文件树每行的下载按钮传入；不传时回退到当前选中文件（兼容旧调用点）。
 const handleDownloadConsoleFile = async (file: ProducedFile | null = selectedConsoleFile.value) => {
   const conversationId = props.conversationId
   if (!file) return
   if (!isWorkspaceFileDownloadable(file.relativePath)) {
-    ElMessage.warning('该文件不允许下载')
+    ElMessage.warning('文件路径为空，无法下载')
     return
   }
   if (!conversationId) {
@@ -897,12 +1273,22 @@ const forgetWorkspaceFileCache = (path: string) => {
   )
   workspaceFileContents.value = contents
   workspaceFileBlobs.value = blobs
+  if (workspaceFileContentMtimes.value[path] !== undefined) {
+    const nextMtimes = { ...workspaceFileContentMtimes.value }
+    delete nextMtimes[path]
+    workspaceFileContentMtimes.value = nextMtimes
+  }
+  if (workspaceFileEditorPath.value === path) {
+    workspaceFileEditorPath.value = null
+    workspaceFileEditorDraft.value = ''
+    workspaceFileEditorBaseMtime.value = null
+  }
   if (revokedUrl) URL.revokeObjectURL(revokedUrl)
 }
 
 // 「导入为语义模型」仅对治理目录下的 Ossie yaml 开放：outputs/governance/（自检通过的交付副本）
 // 与 workspace/governance/（治理工作副本，用户确认后也可直接导）。任意 yaml（其他技能产物、
-// 用户上传）不提供导入入口；workspace/semantic/ 是原模型只读快照，不开放。
+// 用户上传）不提供导入入口；workspace/.system/semantic/ 是原模型只读快照，不开放。
 // 扩展名判断与上方 selectedConsoleFileExt 同一套取后缀习惯用法。
 const isGovernanceYaml = (path: string) => {
   const lower = path.toLowerCase()
@@ -1070,9 +1456,17 @@ watch(
     // 「切换到另一个已有会话」时的面板状态重置（null 边界交给重挂载与 loadWorkspaceFiles 清空）。
     if (prevId && nextId) {
       selectedConsoleFilePath.value = null
+      knownNestedDirectories.clear()
+      openedToolCalls.clear()
+      collapsedConsoleDirectories.value = new Set(DEFAULT_COLLAPSED_CONSOLE_DIRECTORIES)
       // 会话切换：面板 tab 回到工作区根，不把上个会话的工具/文件 tab 带过来
       resetTabs()
       officePreviewCache.value = {}
+      workspaceFileContentMtimes.value = {}
+      workspaceFileEditorPath.value = null
+      workspaceFileEditorDraft.value = ''
+      workspaceFileEditorBaseMtime.value = null
+      liveSubagentTaskUsage.value = {}
       selectedConsoleOfficeHtml.value = null
       selectedConsoleOfficePreviewReason.value = null
       loadingOfficePreviewKey.value = null
@@ -1128,6 +1522,14 @@ provide(WorkspaceFilesContextKey, {
   deletingConsoleFilePath,
   getFileCount,
   workspaceUsage,
+  isWorkspaceFileEditing,
+  isWorkspaceFileDirty,
+  canEditSelectedWorkspaceFile,
+  workspaceFileEditorDraft,
+  workspaceFileEditorSaving,
+  startWorkspaceFileEdit,
+  cancelWorkspaceFileEdit,
+  saveWorkspaceFileEdit,
   handleDeleteConsoleFile,
   handleDownloadConsoleDirectoryArchive,
   handleDownloadConsoleFile,
@@ -1168,6 +1570,9 @@ provide(WorkspaceFilesContextKey, {
   previewPathInnerRef,
   previewPathRef,
   refreshWorkspaceFiles,
+  requestDocumentAnnotation: props.documentAnnotationHandler,
+  documentAnnotationDraft: computed(() => props.documentAnnotationDraft),
+  updateDocumentAnnotationDraft: props.documentAnnotationDraftHandler,
   selectedConsoleBinaryBlob,
   selectedConsoleChartSpec,
   selectedConsoleFile,
@@ -1197,8 +1602,14 @@ defineExpose({
   scheduleRefresh: scheduleWorkspaceFilesRefresh,
   /** 主对话点击工具卡：打开/激活对应工具详情或子智能体 tab */
   openTool: openToolPanelTab,
-  /** 右上角面板入口：回到工作区 tab */
+  /** 输入框任务栏点击：打开该后台任务的完整过程/报告 */
+  openSubagentTask: openSubagentTaskPanelTab,
+  /** 右上角面板入口：回到管理首页 */
+  openHome: openHomePanelTab,
+  /** 管理首页 → 文件管理 */
   openWorkspace: openWorkspacePanelTab,
+  /** 管理首页 → 子智能体管理 */
+  openSubagentManager: openSubagentManagerPanelTab,
   /** 手动兜底刷新：同时刷列表与当前预览内容 */
   refreshFiles: refreshWorkspaceFiles,
   /** 工具写文件后的预览强制重载（仅当写的是当前预览文件） */
@@ -1212,27 +1623,93 @@ defineExpose({
   <ConversationSidePanel
     ref="sidePanelRef"
     :open="open"
-    :auto-follow="isToolTabActive && toolViewMode === 'agent' && Boolean(subagentTaskCall)"
+    :auto-follow="panelAutoFollow"
     :fill-body="isWorkspaceTabActive"
-    :show-subheader="isToolTabActive && Boolean(subagentTaskCall)"
+    :show-subheader="isToolTabActive && (Boolean(subagentTaskCall) || (displayTabIsSubagentTask && Boolean(displaySubagentTask)))"
     :show-trigger="false"
     :show-close="false"
     @open="$emit('update:open', true)"
     @close="$emit('update:open', false)"
   >
-    <!-- 面板 tab 条：工作区常驻，工具详情 / 子智能体过程 / 文件各占一个 tab；
+    <!-- 面板 tab 条：管理首页常驻，文件 / 子智能体管理 / 任务详情各占一个 tab；
          同对象再次打开只激活已有 tab，不替换其他内容。 -->
     <template #tabs>
       <RightSidebarTabStrip
         :tabs="panelTabs"
         :active-tab-id="activePanelTabId"
-        @select="selectPanelTab"
+        @select="selectPanelTabFromStrip"
         @close="closePanelTab"
       />
     </template>
 
     <template #subheader>
-      <div v-if="isToolTabActive && subagentTaskCall" class="flex w-full items-center justify-between gap-2">
+      <div v-if="isToolTabActive && displayTabIsSubagentTask && displaySubagentTask" class="flex w-full items-center justify-between gap-2" data-subagent-task-subheader>
+        <div class="flex min-w-0 items-center gap-2">
+          <span
+            class="inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium"
+            :class="subagentTaskStatusTone(displaySubagentTask)"
+            :title="displaySubagentTask.status_label"
+            :aria-label="`${displaySubagentTask.subagent_type} ${displaySubagentTask.status_label}`"
+            data-subagent-task-status
+          >
+            <span>{{ displaySubagentTask.subagent_type }}</span>
+            <i class="fa-solid text-[9px]" :class="subagentTaskStatusIcon(displaySubagentTask)" aria-hidden="true"></i>
+          </span>
+          <ConversationTokenUsage
+            v-if="displaySubagentTaskUsage"
+            :usage="displaySubagentTaskUsage"
+            :messages="[]"
+            compact
+            data-subagent-task-usage
+          />
+          <span
+            v-if="displaySubagentTaskCompactionCount > 0"
+            class="shrink-0 cursor-default rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] leading-none text-slate-500 tabular-nums"
+            :title="[
+              `本会话共压缩 ${displaySubagentTaskCompactionCount} 次`,
+              ...displaySubagentTaskCompactionTurns.map(item => `第 ${item.turn} 轮 ${item.count} 次`),
+              ...displaySubagentTaskCompactions.map(item => `${item.timestamp || ''} ${item.estimated_tokens_before ?? 0} → ${item.estimated_tokens_after ?? 0} tokens，压缩 ${item.compressed_messages ?? 0} 条`),
+            ].join('\n')"
+          >已压缩 {{ displaySubagentTaskCompactionCount }} 次</span>
+          <button
+            v-if="displaySubagentTaskCancellable"
+            type="button"
+            class="inline-flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-rose-100 bg-rose-50 px-2 text-[11px] font-medium text-rose-500 transition-colors hover:border-rose-200 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+            :disabled="displaySubagentTaskCancelling"
+            data-subagent-task-cancel
+            :title="displaySubagentTaskCancelling ? '正在取消子智能体任务' : '取消正在运行的子智能体任务'"
+            @click.stop="cancelDisplaySubagentTask"
+          >
+            <i :class="displaySubagentTaskCancelling ? 'fa-solid fa-spinner fa-spin' : 'fa-solid fa-stop'" class="text-[9px]"></i>
+            <span>{{ displaySubagentTaskCancelling ? '取消中' : '取消' }}</span>
+          </button>
+        </div>
+        <div class="inline-flex shrink-0 rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-[11px]">
+          <button
+            type="button"
+            class="inline-flex items-center gap-1 rounded-md px-1.5 py-1 transition-colors"
+            :class="toolViewMode === 'agent' ? 'bg-white text-[#1f82d9] shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+            title="聊天模式：按多轮对话查看子智能体过程"
+            data-subagent-view-agent
+            @click="toolViewMode = 'agent'"
+          >
+            <i class="fa-solid fa-robot text-[10px]"></i>
+            <span>聊天</span>
+          </button>
+          <button
+            type="button"
+            class="inline-flex items-center gap-1 rounded-md px-1.5 py-1 transition-colors"
+            :class="toolViewMode === 'generic' ? 'bg-white text-[#1f82d9] shadow-sm' : 'text-slate-500 hover:text-slate-700'"
+            title="工具模式：查看每轮派发的请求参数与结果"
+            data-subagent-view-generic
+            @click="toolViewMode = 'generic'"
+          >
+            <i class="fa-solid fa-wrench text-[10px]"></i>
+            <span>工具</span>
+          </button>
+        </div>
+      </div>
+      <div v-else-if="isToolTabActive && subagentTaskCall" class="flex w-full items-center justify-between gap-2">
         <ConversationTokenUsage
           v-if="subagentUsageForPanel"
           :usage="subagentUsageForPanel"
@@ -1252,6 +1729,7 @@ defineExpose({
             class="inline-flex items-center gap-1 rounded-md px-1.5 py-1 transition-colors"
             :class="toolViewMode === 'agent' ? 'bg-white text-[#1f82d9] shadow-sm' : 'text-slate-500 hover:text-slate-700'"
             title="聊天模式：按聊天方式查看子智能体过程"
+            data-subagent-view-agent
             @click="toolViewMode = 'agent'"
           >
             <i class="fa-solid fa-robot text-[10px]"></i>
@@ -1262,6 +1740,7 @@ defineExpose({
             class="inline-flex items-center gap-1 rounded-md px-1.5 py-1 transition-colors"
             :class="toolViewMode === 'generic' ? 'bg-white text-[#1f82d9] shadow-sm' : 'text-slate-500 hover:text-slate-700'"
             title="工具模式：与普通工具一致，只查看参数与结果"
+            data-subagent-view-generic
             @click="toolViewMode = 'generic'"
           >
             <i class="fa-solid fa-wrench text-[10px]"></i>
@@ -1271,6 +1750,30 @@ defineExpose({
       </div>
     </template>
 
+    <div v-show="isHomeTabActive" class="min-h-full">
+      <RightSidebarHome
+        :file-count="producedFiles.length"
+        :used-bytes="workspaceUsage.used_bytes"
+        :limit-bytes="workspaceUsage.limit_bytes"
+        :task-count="subagentSessionCount"
+        :active-task-count="subagentTasks.filter(isSubagentTaskActive).length"
+        @open-files="openWorkspacePanelTab"
+        @open-subagents="openSubagentManagerPanelTab"
+      />
+    </div>
+
+    <div v-show="isSubagentManagerTabActive" class="min-h-0">
+      <SubagentManagerTab
+        :tasks="allSubagentTasks"
+        :cancelling-task-ids="subagentTaskCancellingIds"
+        :closing-task-ids="subagentTaskClosingIds"
+        :load-task-detail="loadSubagentTaskDetail"
+        @open="openSubagentTaskPanelTab"
+        @cancel="cancelSubagentTaskFromManager"
+        @close-session="closeSubagentSessionFromManager"
+      />
+    </div>
+
     <div v-show="isWorkspaceTabActive" class="flex min-h-0 flex-1 flex-col">
       <!-- 文件管理 tab 自己的工具条：根路径 / 一键折叠 / 文件数量。
            这类信息属于「文件管理」，不能放进 tab 条（会和 tab 胶囊挤在一起）。 -->
@@ -1279,6 +1782,31 @@ defineExpose({
     </div>
 
     <div v-show="isToolTabActive" class="min-h-0">
+      <!-- 子智能体任务 tab：过程/报告直接来自任务账本详情，不依赖父 Run 的工具调用 -->
+      <template v-for="taskTab in subagentTaskTabs" :key="taskTab.id">
+        <SubagentTaskProcessView
+          v-if="subagentTaskForTab(taskTab)"
+          v-show="displayToolTab?.id === taskTab.id"
+          :task="subagentTaskForTab(taskTab) as SubagentTaskRecord"
+          :session-tasks="subagentTasksForTab(taskTab)"
+          :conversation-id="conversationId"
+          :datasource-id="datasourceId"
+          :execution-targets="executionTargets"
+          :on-save="onSave"
+          :active-tool-call-id="activeToolCall?.tool_call_id || null"
+          :view-mode="toolViewMode"
+          class="mb-3"
+          @select-tool="emit('selectTool', $event)"
+          @usage-updated="handleSubagentTaskUsageUpdated"
+        />
+      </template>
+      <div
+        v-if="displayTabIsSubagentTask && !displaySubagentTask"
+        class="flex items-center gap-2 rounded-xl border border-dashed border-slate-200 px-3.5 py-4 text-[12px] text-slate-500"
+      >
+        <i class="fa-solid fa-spinner fa-spin text-slate-400"></i>
+        <span>正在读取任务详情…</span>
+      </div>
       <!-- 每个子智能体 tab 一份常驻过程视图：多开/点内层工具/切文件 tab 都不卸载 -->
       <AgentProcessView
         v-for="processTab in agentProcessTabs"
@@ -1286,6 +1814,9 @@ defineExpose({
         v-show="displayToolTab?.id === processTab.id && toolViewMode === 'agent'"
         :tool-call="toolCallForTab(processTab) as ToolCallInfo"
         :conversation-id="conversationId"
+        :datasource-id="datasourceId"
+        :execution-targets="executionTargets"
+        :on-save="onSave"
         :active-tool-call-id="displayToolCall?.tool_call_id || null"
         class="mb-3"
         @select-tool="emit('selectTool', $event)"

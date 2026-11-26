@@ -25,6 +25,9 @@ interface Props {
   runActive?: boolean
   /** 生成中的实时速率（tokens/s，后端滑窗推送）；null 表示暂不展示 */
   liveGenerationSpeed?: number | null
+  /** 本轮已推进的图步数与递归上限（run_steps 事件）；null 表示暂不展示 */
+  liveSupersteps?: number | null
+  liveSuperstepLimit?: number | null
   /** 本轮已执行耗时（毫秒，从本轮发起起算的墙钟，实时递增）；null 表示暂不展示 */
   liveElapsedMs?: number | null
 }
@@ -35,6 +38,8 @@ const props = withDefaults(defineProps<Props>(), {
   activeToolCallId: null,
   runActive: false,
   liveGenerationSpeed: null,
+  liveSupersteps: null,
+  liveSuperstepLimit: null,
   liveElapsedMs: null,
 })
 
@@ -84,6 +89,8 @@ const {
       :is-current-run="isCurrentRun(messageIndex)"
       :show-footer="shouldShowFooter(message, messageIndex)"
       :live-generation-speed="liveGenerationSpeed"
+      :live-supersteps="liveSupersteps"
+      :live-superstep-limit="liveSuperstepLimit"
       :live-elapsed-ms="liveElapsedMs"
       :resolve-tool-call="resolveToolCall"
       :should-inline-render-result="shouldInlineRenderResult"

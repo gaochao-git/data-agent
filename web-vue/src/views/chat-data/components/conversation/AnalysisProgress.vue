@@ -6,7 +6,7 @@
 import { computed, ref } from 'vue'
 import type { AnalysisTodosState } from '../../utils/analysisTodos'
 
-const props = defineProps<{ todos: AnalysisTodosState }>()
+const props = defineProps<{ todos: AnalysisTodosState; embedded?: boolean }>()
 
 const collapsed = ref(true)
 
@@ -25,7 +25,10 @@ const statusText = computed(() => {
 </script>
 
 <template>
-  <div class="overflow-hidden rounded-lg border border-slate-200 bg-white">
+  <div
+    class="overflow-hidden"
+    :class="props.embedded ? 'border-b border-slate-100 bg-slate-50/60' : 'rounded-lg border border-slate-200 bg-white'"
+  >
     <button
       type="button"
       class="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] transition-colors hover:bg-slate-50"

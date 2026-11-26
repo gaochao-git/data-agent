@@ -37,13 +37,17 @@ SSE_EVENT_DONE = "done"
 # 运行度量
 SSE_EVENT_TOKEN_USAGE = "token_usage"
 SSE_EVENT_GENERATION_SPEED = "generation_speed"
+SSE_EVENT_RUN_STEPS = "run_steps"
 SSE_EVENT_CONTEXT_COMPRESSION = "context_compression"
+SSE_EVENT_CONVERSATION_TITLE_UPDATED = "conversation_title_updated"
+SSE_EVENT_HEARTBEAT = "heartbeat"
 SSE_EVENT_INBOX_ADMITTED = "inbox_admitted"
 SSE_EVENT_QUESTION_REQUESTED = "question_requested"
 # 工具生命周期：``tool`` 是旧的全量快照帧，与细粒度帧并行下发，
 # 前端按 tool_call_id 在顶层 tool 帧里去重（同一工具的完整快照已由细粒度帧先行分发）。
 SSE_EVENT_TOOL = "tool"
 SSE_EVENT_TOOL_STARTED = "tool_started"
+SSE_EVENT_TOOL_ARGS_DELTA = "tool_args_delta"
 SSE_EVENT_TOOL_PROGRESS = "tool_progress"
 SSE_EVENT_TOOL_COMPLETED = "tool_completed"
 SSE_EVENT_TOOL_FAILED = "tool_failed"
@@ -51,8 +55,12 @@ SSE_EVENT_TOOL_FAILED = "tool_failed"
 SSE_EVENT_SUBAGENT_MESSAGE = "subagent_message"
 SSE_EVENT_SUBAGENT_MESSAGE_DELTA = "subagent_message_delta"
 SSE_EVENT_SUBAGENT_THINKING_DELTA = "subagent_thinking_delta"
+SSE_EVENT_SUBAGENT_GENERATION_SPEED = "subagent_generation_speed"
+SSE_EVENT_SUBAGENT_STEPS = "subagent_steps"
 SSE_EVENT_SUBAGENT_CONTEXT_USAGE = "subagent_context_usage"
 SSE_EVENT_SUBAGENT_CONTEXT_COMPRESSION = "subagent_context_compression"
+# 后台子智能体任务账本的实时快照：随父 Run SSE 下发，断线/空闲时由任务列表接口兜底
+SSE_EVENT_SUBAGENT_TASK_UPDATED = "subagent_task_updated"
 
 SSE_EVENT_NAMES: frozenset[str] = frozenset(
     {
@@ -63,18 +71,26 @@ SSE_EVENT_NAMES: frozenset[str] = frozenset(
         SSE_EVENT_DONE,
         SSE_EVENT_TOKEN_USAGE,
         SSE_EVENT_GENERATION_SPEED,
+        SSE_EVENT_RUN_STEPS,
         SSE_EVENT_CONTEXT_COMPRESSION,
+        SSE_EVENT_CONVERSATION_TITLE_UPDATED,
+        SSE_EVENT_HEARTBEAT,
         SSE_EVENT_INBOX_ADMITTED,
         SSE_EVENT_QUESTION_REQUESTED,
         SSE_EVENT_TOOL,
         SSE_EVENT_TOOL_STARTED,
+        SSE_EVENT_TOOL_ARGS_DELTA,
         SSE_EVENT_TOOL_PROGRESS,
         SSE_EVENT_TOOL_COMPLETED,
         SSE_EVENT_TOOL_FAILED,
         SSE_EVENT_SUBAGENT_MESSAGE,
         SSE_EVENT_SUBAGENT_MESSAGE_DELTA,
         SSE_EVENT_SUBAGENT_THINKING_DELTA,
+        SSE_EVENT_SUBAGENT_GENERATION_SPEED,
+        SSE_EVENT_SUBAGENT_STEPS,
         SSE_EVENT_SUBAGENT_CONTEXT_USAGE,
+        SSE_EVENT_SUBAGENT_CONTEXT_COMPRESSION,
+        SSE_EVENT_SUBAGENT_TASK_UPDATED,
     }
 )
 

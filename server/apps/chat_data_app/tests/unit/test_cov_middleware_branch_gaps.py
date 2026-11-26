@@ -36,6 +36,7 @@ from apps.chat_data_app.agent.middleware import message_integrity as integrity
 from apps.chat_data_app.agent.middleware import subagents
 from apps.chat_data_app.agent.middleware.context_compression import ContextInputLimitExceededError
 from apps.chat_data_app.agent.middleware.mcp_tool_discovery import MCPToolDiscoveryMiddleware
+from apps.chat_data_app.agent.middleware.subagent_text import TOOL_CALL_OPENER
 from apps.chat_data_app.agent.middleware.subagents import SubagentMiddleware, SubagentSpec
 
 
@@ -49,12 +50,18 @@ def _ai(tool_calls: list) -> AIMessage:
 # ---------------------------------------------------------------------------
 
 
-def test_notify_compression_started_swallows_callback_error():
+def test_notify_compression_started_swallows_callback_error(monkeypatch):
+    debug_logs: list[str] = []
+    monkeypatch.setattr(compression.logger, "debug", lambda *args, **kwargs: debug_logs.append(str(args[0])))
+
     def _boom() -> None:
         raise RuntimeError("stream unavailable")
 
     compression._notify_compression_started(_boom)
     compression._notify_compression_started(None)
+
+    # 只有回调抛错那次留下降级日志；None 回调直接跳过，不记日志
+    assert debug_logs == ["推送压缩开始事件失败，不影响压缩主流程"]
 
 
 @pytest.mark.asyncio
@@ -245,7 +252,7 @@ def test_subagent_middleware_wrap_model_call_appends_prompt():
         return "handled"
 
     assert middleware.wrap_model_call(_prompt_request(), handler) == "handled"
-    assert "## 子智能体委派" in seen["request"].system_message.content
+    assert "## 子智能体" in seen["request"].system_message.content
 
 
 @pytest.mark.asyncio
@@ -258,12 +265,12 @@ async def test_subagent_middleware_awrap_model_call_appends_prompt():
         return "handled"
 
     assert await middleware.awrap_model_call(_prompt_request(), handler) == "handled"
-    assert "## 子智能体委派" in seen["request"].system_message.content
+    assert "## 子智能体" in seen["request"].system_message.content
 
 
 def test_streaming_tool_call_filter_flushes_full_opener_marker():
     markup_filter = subagents._StreamingToolCallMarkupFilter()
-    markup_filter._pending = subagents._TOOL_CALL_OPENER
+    markup_filter._pending = TOOL_CALL_OPENER
 
     assert markup_filter.flush() == ""
 
@@ -293,6 +300,7 @@ def test_compile_subagent_appends_fence_when_run_controls_complete(monkeypatch):
 
     def fake_create_agent(_model, **kwargs):
         captured["middleware"] = kwargs["middleware"]
+        captured["kwargs"] = kwargs
         return "compiled"
 
     monkeypatch.setattr(subagents, "create_agent", fake_create_agent)
@@ -307,6 +315,9 @@ def test_compile_subagent_appends_fence_when_run_controls_complete(monkeypatch):
 
     assert subagents._compile_subagent(spec, run_controls=run_controls) == "compiled"
     assert "fence" in captured["middleware"]
+    # 不传 name：它会被 LangChain 写进每条 AIMessage，进而以 assistant name
+    # 进入 OpenAI 请求体，被严格校验的模板拒绝（assistant name 与工具名不符）。
+    assert "name" not in captured["kwargs"]
 
 
 # ---------------------------------------------------------------------------
@@ -346,9 +357,15 @@ class _TimingWriteFailure:
 
 
 def test_stamp_response_timing_swallows_write_failure(monkeypatch):
+    warnings: list[str] = []
+    monkeypatch.setattr(usage.logger, "warning", lambda *args, **kwargs: warnings.append(str(args[0])))
     monkeypatch.setattr(usage, "_extract_response_message", lambda _response: _TimingWriteFailure())
 
     usage._stamp_response_timing(object(), started_at_ms=1, ended_at_ms=2)
+
+    # 注入的写入异常确实被吞并降级告警，而不是函数提前返回或压根没尝试盖章
+    assert len(warnings) == 1
+    assert "写入响应消息失败" in warnings[0]
 
 
 def test_add_cache_hit_rate_skips_without_reported_input():

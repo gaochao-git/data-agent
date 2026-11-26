@@ -833,66 +833,62 @@ async def _run_list_action_types(
     )
 
 
-async def _run_execute_action(
-    *,
+async def _run_action_dry_run(
     payload: Any,
-    state: dict | None,
-    bound_user_id: str,
+    *,
+    user_id: str,
+    operator_name: str,
 ) -> str:
-    """执行 Action：校验参数/属性值/提交条件后写覆盖层 + 审计；dry_run 只跑 test run。"""
-    state = state or {}
-    user_id = str(state.get("user_id") or "").strip() or bound_user_id
-    operator_name = str(state.get("operator_name") or "").strip()
-    if payload.dry_run:
-        # test run 是只读动作，不受执行开关门控（对齐官方：预览不改数据）
-        result = await OntologyActionTypeService().test_run_action_type_async(
-            payload.action_type,
-            dict(payload.parameters or {}),
-            object_key=payload.object_key,
-            operator=user_id,
-            operator_name=operator_name or user_id,
-        )
-        return tool_result_payload(
-            ONTOLOGY_TOOL_NAME,
-            {
-                "dry_run": True,
-                "object_type": result.get("object_type_name"),
-                "proposed_changes": result.get("proposed_changes"),
-                "execution_log": result.get("execution_log"),
-                "errors": result.get("errors"),
-                "baseline": (result.get("baseline") or {}).get("row_hash"),
-                "usage": (
-                    "这是 test run，未写入任何数据；确认 proposed_changes 后再以 dry_run=false 提交，"
-                    "并把 baseline 作为 expected_baseline 传回（提交前会校验对象是否被改过）。"
-                ),
-            },
-        )
-    if not ontology_action_execute_enabled():
-        raise ValueError("Action 执行未启用：需设置环境变量 CHAT_DATA_ONTOLOGY_ACTION_EXECUTE_ENABLED=1")
-    service = OntologyActionTypeService()
-    expected_baseline = payload.expected_baseline
-    baseline_source = "caller"
-    if not expected_baseline:
-        # 服务端兜底：模型可能忘记回传 baseline，此时不能让冲突检测静默失效。
-        # 自动补一次只读 test run，用刚算出的基线提交；LLM 传了则以 LLM 的为准，
-        # 保留「预演 → 用户确认 → 提交」之间的真实冲突窗口。
-        preview = await service.test_run_action_type_async(
-            payload.action_type,
-            dict(payload.parameters or {}),
-            object_key=payload.object_key,
-            operator=user_id,
-            operator_name=operator_name or user_id,
-        )
-        expected_baseline = (preview.get("baseline") or {}).get("row_hash") or ""
-        baseline_source = "auto_preview" if expected_baseline else "unavailable"
-    result = await service.execute_action_type_async(
+    # test run 是只读动作，不受执行开关门控（对齐官方：预览不改数据）
+    result = await OntologyActionTypeService().test_run_action_type_async(
         payload.action_type,
+        dict(payload.parameters or {}),
         object_key=payload.object_key,
-        parameters=dict(payload.parameters or {}),
         operator=user_id,
         operator_name=operator_name or user_id,
-        expected_baseline=expected_baseline,
     )
+    return tool_result_payload(
+        ONTOLOGY_TOOL_NAME,
+        {
+            "dry_run": True,
+            "object_type": result.get("object_type_name"),
+            "proposed_changes": result.get("proposed_changes"),
+            "execution_log": result.get("execution_log"),
+            "errors": result.get("errors"),
+            "baseline": (result.get("baseline") or {}).get("row_hash"),
+            "usage": (
+                "这是 test run，未写入任何数据；确认 proposed_changes 后再以 dry_run=false 提交，"
+                "并把 baseline 作为 expected_baseline 传回（提交前会校验对象是否被改过）。"
+            ),
+        },
+    )
+
+
+async def _resolve_action_expected_baseline(
+    service: OntologyActionTypeService,
+    payload: Any,
+    *,
+    user_id: str,
+    operator_name: str,
+) -> tuple[str, str]:
+    expected_baseline = payload.expected_baseline
+    if expected_baseline:
+        return expected_baseline, "caller"
+    # 服务端兜底：模型可能忘记回传 baseline，此时不能让冲突检测静默失效。
+    # 自动补一次只读 test run，用刚算出的基线提交；LLM 传了则以 LLM 的为准，
+    # 保留「预演 → 用户确认 → 提交」之间的真实冲突窗口。
+    preview = await service.test_run_action_type_async(
+        payload.action_type,
+        dict(payload.parameters or {}),
+        object_key=payload.object_key,
+        operator=user_id,
+        operator_name=operator_name or user_id,
+    )
+    expected_baseline = (preview.get("baseline") or {}).get("row_hash") or ""
+    return expected_baseline, "auto_preview" if expected_baseline else "unavailable"
+
+
+def _build_action_execution_result(result: dict[str, Any], baseline_source: str) -> str:
     return tool_result_payload(
         ONTOLOGY_TOOL_NAME,
         {
@@ -912,6 +908,38 @@ async def _run_execute_action(
             ),
         },
     )
+
+
+async def _run_execute_action(
+    *,
+    payload: Any,
+    state: dict | None,
+    bound_user_id: str,
+) -> str:
+    """执行 Action：校验参数/属性值/提交条件后写覆盖层 + 审计；dry_run 只跑 test run。"""
+    state = state or {}
+    user_id = str(state.get("user_id") or "").strip() or bound_user_id
+    operator_name = str(state.get("operator_name") or "").strip()
+    if payload.dry_run:
+        return await _run_action_dry_run(payload, user_id=user_id, operator_name=operator_name)
+    if not ontology_action_execute_enabled():
+        raise ValueError("Action 执行未启用：需设置环境变量 CHAT_DATA_ONTOLOGY_ACTION_EXECUTE_ENABLED=1")
+    service = OntologyActionTypeService()
+    expected_baseline, baseline_source = await _resolve_action_expected_baseline(
+        service,
+        payload,
+        user_id=user_id,
+        operator_name=operator_name,
+    )
+    result = await service.execute_action_type_async(
+        payload.action_type,
+        object_key=payload.object_key,
+        parameters=dict(payload.parameters or {}),
+        operator=user_id,
+        operator_name=operator_name or user_id,
+        expected_baseline=expected_baseline,
+    )
+    return _build_action_execution_result(result, baseline_source)
 
 
 async def _run_revert_action(

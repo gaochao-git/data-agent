@@ -8,6 +8,7 @@ import {
   getActiveThinkingSegmentId,
   getAssistantCopyText,
   getEffectiveAttachments,
+  getUserDocumentAnnotations,
   findFinalAnswerSegmentIndex,
   getThinkingPreviewText,
   hasWorkProcess,
@@ -17,11 +18,14 @@ import {
   hasSubagentTrail,
   hasVisibleAssistantContent,
   isLongUserMessage,
+  mergeToolCallFromMessage,
   parseAttachmentPlaceholders,
+  parseDocumentAnnotationBlocks,
   resolveActiveRunStartIndex,
   shouldShowAssistantFooter,
   shouldShowStreamingStatus,
   stripAttachmentPlaceholders,
+  stripUserMessageInternalSuffixes,
 } from '../messageView'
 
 const assistant = (patch: Partial<Message> = {}): Message => ({
@@ -29,6 +33,52 @@ const assistant = (patch: Partial<Message> = {}): Message => ({
   role: 'assistant',
   content: '',
   ...patch,
+})
+
+describe('mergeToolCallFromMessage', () => {
+  it('完整 AIMessage 收口时保留流式阶段写入的 +N/-M 与 intent', () => {
+    const existing: ToolCallInfo = {
+      tool_call_id: 'call-1',
+      tool_name: 'file_write',
+      args: { intent: '写入100行随机内容的文档' },
+      status: 'running',
+      contentLines: 100,
+      removedLines: 0,
+      streamingIntent: '写入100行随机内容的文档',
+      argsStreaming: false,
+    }
+
+    const merged = mergeToolCallFromMessage(existing, {
+      id: 'call-1',
+      name: 'file_write',
+      args: { file_path: '/mnt/user-data/workspace/百行随笔.txt', content: '第一行\n第二行' },
+    })
+
+    expect(merged).toMatchObject({
+      tool_call_id: 'call-1',
+      tool_name: 'file_write',
+      status: 'running',
+      contentLines: 100,
+      removedLines: 0,
+      streamingIntent: '写入100行随机内容的文档',
+    })
+    expect(merged.args).toMatchObject({
+      file_path: '/mnt/user-data/workspace/百行随笔.txt',
+      content: '第一行\n第二行',
+    })
+  })
+
+  it('没有既有工具卡时按生成中占位，不臆造行数', () => {
+    const merged = mergeToolCallFromMessage(undefined, {
+      id: 'call-2',
+      name: 'file_write',
+      args: { content: 'hello' },
+    })
+
+    expect(merged).toMatchObject({ tool_call_id: 'call-2', status: 'generating' })
+    expect(merged.contentLines).toBeUndefined()
+    expect(merged.removedLines).toBeUndefined()
+  })
 })
 
 const toolCall = (patch: Partial<ToolCallInfo> = {}): ToolCallInfo => ({
@@ -262,13 +312,92 @@ describe('用户消息投影', () => {
     expect(formatFileSize(2048)).toBe('2.0 KB')
     expect(formatFileSize(3 * 1024 * 1024)).toBe('3.0 MB')
   })
+
+  it('展示层剥离文档选中内容块与旧版散落的执行提示', () => {
+    const content = [
+      '这段话的来源是哪里',
+      '',
+      '[文档选中内容开始]',
+      '文件：/mnt/user-data/outputs/示例文档.docx',
+      '定位：/body/p[4]（第 1 页）',
+      '选中原文：这是一份示例文档',
+      '问题或要求：这段话的依据是什么？',
+      '处理建议：先根据用户的问题或要求判断意图；只需解释、核对或回答时，不要改动文件。',
+      '[文档选中内容结束]',
+      '',
+      '请按「定位」修改文档；完成后重新展示修改后的文件。',
+    ].join('\n')
+    expect(stripUserMessageInternalSuffixes(content)).toBe('这段话的来源是哪里')
+  })
+
+  it('旧历史只有标记块时反解出文档标注 chip', () => {
+    const content = [
+      '请修改这处',
+      '[文档修改请求开始]',
+      '文件：/mnt/user-data/outputs/示例文档.docx',
+      '定位：/body/p[4]（第 1 页）',
+      '原文：这是一份示例文档',
+      '修改要求：改成季度经营分析',
+      '[文档修改请求结束]',
+    ].join('\n')
+    expect(parseDocumentAnnotationBlocks(content)).toEqual([
+      {
+        id: 'doc-annotation-legacy-0',
+        filePath: 'outputs/示例文档.docx',
+        docPath: '/body/p[4]',
+        quote: '这是一份示例文档',
+        comment: '改成季度经营分析',
+      },
+    ])
+    expect(getUserDocumentAnnotations({ id: 'u', role: 'user', content })).toHaveLength(1)
+  })
+
+  it('问题已在消息正文时，标记块可省略问题字段且 chip 仍保留', () => {
+    const content = [
+      '这段话的依据是什么？',
+      '[文档选中内容开始]',
+      '文件：/mnt/user-data/outputs/示例文档.docx',
+      '定位：/body/p[4]（第 1 页）',
+      '选中原文：这是一份示例文档',
+      '[文档选中内容结束]',
+    ].join('\n')
+    expect(parseDocumentAnnotationBlocks(content)).toEqual([
+      expect.objectContaining({
+        filePath: 'outputs/示例文档.docx',
+        docPath: '/body/p[4]',
+        comment: '',
+      }),
+    ])
+    expect(getUserDocumentAnnotations({ id: 'u', role: 'user', content })).toHaveLength(1)
+  })
+
+  it('旧消息原文跨行时保留续行，不丢字段', () => {
+    const content = [
+      '这个来源是哪里',
+      '[文档选中内容开始]',
+      '文件：/mnt/user-data/outputs/示例文档.docx',
+      '定位：/body/table[3]/tr[11]/tc[5]',
+      '选中原文：第一行原文',
+      '第二行：仍属于原文',
+      '问题或要求：这个来源是哪里',
+      '[文档选中内容结束]',
+    ].join('\n')
+    expect(parseDocumentAnnotationBlocks(content)).toEqual([
+      expect.objectContaining({
+        filePath: 'outputs/示例文档.docx',
+        docPath: '/body/table[3]/tr[11]/tc[5]',
+        quote: '第一行原文\n第二行：仍属于原文',
+        comment: '这个来源是哪里',
+      }),
+    ])
+  })
 })
 
 describe('子智能体过程 → 主对话消息投影', () => {
   const taskCall = (patch: Partial<ToolCallInfo> = {}): ToolCallInfo => toolCall({
     tool_call_id: 'call-task',
-    tool_name: 'task',
-    args: { description: '盘点语义模型中的指标', subagent_type: 'explore' },
+    tool_name: 'subagent',
+    args: { dispatch: { description: '盘点语义模型中的指标', subagent_type: 'explore' } },
     result: '报告',
     status: 'running',
     ...patch,
@@ -300,7 +429,34 @@ describe('子智能体过程 → 主对话消息投影', () => {
     expect(settled[1]!.isStreaming).toBe(false)
   })
 
-  it('工具先于消息出现时仍合并进同一条助手消息；无有效过程时只有任务书', () => {
+  it('旧 task 的扁平参数同样投影任务书', () => {
+    const messages = buildSubagentMessages(taskCall({
+      tool_name: 'task',
+      args: { description: '盘点语义模型中的指标', subagent_type: 'explore' },
+    }))
+
+    expect(messages[0]).toMatchObject({ role: 'user', content: '盘点语义模型中的指标' })
+  })
+
+  it('终态错误只挂在最后一条助手消息，不随压缩分段重复', () => {
+    const messages = buildSubagentMessages(taskCall({
+      status: 'error',
+      subagentError: '任务超过 3600 秒未完成',
+      subagentTrail: [
+        { kind: 'message', id: 'msg-1', content: '第一段' },
+        { kind: 'compaction', id: 'compact-1', timestamp: '2026-11-19T16:25:19+08:00' },
+        { kind: 'message', id: 'msg-2', content: '第二段' },
+        { kind: 'compaction', id: 'compact-2', timestamp: '2026-11-19T16:42:14+08:00' },
+        { kind: 'message', id: 'msg-3', content: '第三段' },
+      ],
+    }))
+
+    const assistants = messages.filter(message => message.role === 'assistant')
+    expect(assistants.map(message => Boolean(message.error))).toEqual([false, false, true])
+    expect(assistants[assistants.length - 1]?.error).toBe('任务超过 3600 秒未完成')
+  })
+
+  it('工具先于消息出现时仍合并进同一条助手消息；无 trail 时任务书 + 报告气泡', () => {
     const toolFirst = buildSubagentMessages(taskCall({
       subagentTrail: [
         { kind: 'tool', id: 'inner-1', tool_name: 'file_read', args: {}, status: 'running' },
@@ -311,7 +467,8 @@ describe('子智能体过程 → 主对话消息投影', () => {
     expect(toolFirst[1]!.segments).toHaveLength(2)
 
     const promptOnly = buildSubagentMessages(taskCall({ subagentTrail: [], status: 'completed' }))
-    expect(promptOnly.map(message => message.role)).toEqual(['user'])
+    expect(promptOnly.map(message => message.role)).toEqual(['user', 'assistant'])
+    expect(promptOnly[1]!.segments).toEqual([{ type: 'text', content: '报告' }])
     // 运行中即使没有正文/工具段也保留助手占位，状态行（工作中动画）可见
     const runningEmpty = buildSubagentMessages(taskCall({ subagentTrail: [], status: 'running' }))
     expect(runningEmpty.map(message => message.role)).toEqual(['user', 'assistant'])
@@ -321,8 +478,8 @@ describe('子智能体过程 → 主对话消息投影', () => {
 describe('子智能体过程投影', () => {
   const taskCall = (patch: Partial<ToolCallInfo> = {}): ToolCallInfo => toolCall({
     tool_call_id: 'call-task',
-    tool_name: 'task',
-    args: { description: '任务书' },
+    tool_name: 'subagent',
+    args: { dispatch: { description: '任务书' } },
     result: '结论',
     status: 'running',
     ...patch,
@@ -404,6 +561,26 @@ describe('子智能体过程投影', () => {
     expect(messages[1]!.toolCalls?.[0]).toMatchObject({ started_at_ms: 1_000, ended_at_ms: 1_250 })
   })
 
+  it('内层文件工具行数随 trail 进入工具卡（与主对话 +N / -M 同口径）', () => {
+    const blocks = buildSubagentTrailBlocks(taskCall({
+      subagentTrail: [{
+        kind: 'tool',
+        id: 'inner-edit',
+        tool_name: 'file_edit',
+        args: { file_path: '/a.html' },
+        status: 'completed',
+        result: '已修改',
+        contentLines: 12,
+        removedLines: 3,
+      }],
+    }))
+
+    expect((blocks[0] as { toolCall: ToolCallInfo }).toolCall).toMatchObject({
+      contentLines: 12,
+      removedLines: 3,
+    })
+  })
+
   it('内层查询工具派生可渲染结果面板（renderId/语义参数），普通工具不派生', () => {
     const envelope = JSON.stringify({ type: 'query_result', status: 'succeeded', data: null, meta: { result_id: 'q1' } })
     const blocks = buildSubagentTrailBlocks(taskCall({
@@ -425,13 +602,36 @@ describe('子智能体过程投影', () => {
     expect(calcBlock?.queryResultToolCall).toBeNull()
   })
 
-  it('非 task / 无 trail 不算过程区', () => {
+  it('无 trail 的后台任务也投影成主对话消息：任务书 + 报告气泡', () => {
+    const messages = buildSubagentMessages(taskCall({
+      status: 'completed',
+      result: '完整报告正文',
+      subagentTrail: [],
+    }))
+    expect(messages.map(message => message.role)).toEqual(['user', 'assistant'])
+    expect(messages[0]?.content).toBe('任务书')
+    expect(messages[1]?.segments).toEqual([{ type: 'text', content: '完整报告正文' }])
+    expect(buildMessageBlocks(messages[1]!)).toEqual([
+      { type: 'text', key: 'text-0', content: '完整报告正文', finalAnswer: true },
+    ])
+  })
+
+  it('无 trail 的进行中任务保留助手占位，详情页能显示“正在处理”', () => {
+    const messages = buildSubagentMessages(taskCall({ status: 'running', result: '', subagentTrail: [] }))
+    expect(messages.map(message => message.role)).toEqual(['user', 'assistant'])
+    expect(messages[1]?.isStreaming).toBe(true)
+    expect(messages[1]?.segments).toEqual([])
+  })
+
+  it('识别统一子智能体工具和旧 task 历史的过程区，普通工具或无 trail 不算', () => {
     const call = taskCall({
       subagentTrail: [
         { kind: 'tool', id: 'inner-1', tool_name: 'calculator_tool', args: {}, status: 'running' },
       ],
     })
     expect(hasSubagentTrail(call)).toBe(true)
+    expect(hasSubagentTrail({ ...call, tool_name: 'task' })).toBe(true)
+    expect(hasSubagentTrail({ ...call, tool_name: 'subagent_start' })).toBe(false)
     expect(hasSubagentTrail({ ...call, tool_name: 'calculator_tool' })).toBe(false)
     expect(hasSubagentTrail({ ...call, subagentTrail: [] })).toBe(false)
   })

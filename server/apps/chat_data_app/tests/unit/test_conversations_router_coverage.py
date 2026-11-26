@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
+from apps.chat_data_app.agent.contracts.subagent_task import ACTIVE_TASK_STATUSES, SubagentSessionActiveError
 from apps.chat_data_app.routers import conversations as conversation_router
 from auth import AuthenticationError
 from utils.error_codes import ErrorCode
@@ -568,7 +569,7 @@ async def test_list_steer_messages_and_stream_events(router_state, monkeypatch):
     assert response.media_type == "text/event-stream"
     assert response.headers["x-chatdata-run-id"] == "run_1"
     chunks = [chunk async for chunk in response.body_iterator]
-    assert "id: 1-0" in chunks[0]
+    assert any("id: 1-0" in chunk for chunk in chunks)
 
     monkeypatch.setattr(conversation_router.agent_inbox_service, "get_run_snapshot", snapshot_boom)
     body = payload(await conversation_router.stream_run_events("conv_1", "run_1", FakeRequest()))
@@ -691,3 +692,201 @@ async def test_get_conversation_context_branches(router_state, monkeypatch):
     )
     with pytest.raises(HTTPException):
         await conversation_router.get_conversation_context("conv_1", FakeRequest())
+
+
+def _subagent_task_record(status="completed", report="完整报告"):
+    def as_dict(include_report=True):
+        data = {
+            "task_id": "t1",
+            "conversation_id": "conv_1",
+            "status": status,
+            "status_label": "已完成" if status == "completed" else status,
+        }
+        if include_report:
+            data["report"] = report
+            data["result_meta"] = {"subagent_trail": []}
+        return data
+
+    return SimpleNamespace(task_id="t1", status=status, as_dict=as_dict)
+
+
+@pytest.mark.asyncio
+async def test_subagent_task_routes_list_detail_and_cancel(router_state, monkeypatch):
+    monkeypatch.setattr(conversation_router, "_get_current_user_identity", identity_sync)
+    calls = []
+
+    async def list_tasks(conversation_id, user_id, *, statuses=None, limit=50):
+        calls.append((conversation_id, user_id, statuses, limit))
+        return [_subagent_task_record()]
+
+    monkeypatch.setattr(conversation_router.subagent_task_service, "list_tasks", list_tasks)
+    body = payload(
+        await conversation_router.list_subagent_tasks(
+            "conv_1",
+            FakeRequest(),
+            status_filter="active",
+            limit=5,
+        )
+    )
+    assert calls == [("conv_1", "u1", set(ACTIVE_TASK_STATUSES), 5)]
+    assert body["data"]["count"] == 1
+    assert body["data"]["tasks"][0]["task_id"] == "t1"
+    assert "report" not in body["data"]["tasks"][0]
+
+    async def get_task(task_id, *, conversation_id=None, user_id=None):
+        if task_id == "missing":
+            return None
+        return _subagent_task_record()
+
+    monkeypatch.setattr(conversation_router.subagent_task_service, "get_task", get_task)
+    body = payload(await conversation_router.get_subagent_task("conv_1", "t1", FakeRequest()))
+    assert body["data"]["report"] == "完整报告"
+    assert body["data"]["result_meta"] == {"subagent_trail": []}
+
+    missing = await conversation_router.get_subagent_task("conv_1", "missing", FakeRequest())
+    assert missing.status_code == 404
+    assert payload(missing)["msg"] == "后台任务不存在"
+
+    async def cancel_task(conversation_id, user_id, task_id, operator_name, *, origin):
+        assert origin == "user"
+        return _subagent_task_record(status="cancelling", report="")
+
+    monkeypatch.setattr(conversation_router.subagent_task_service, "cancel_task", cancel_task)
+    body = payload(await conversation_router.cancel_subagent_task("conv_1", "t1", FakeRequest()))
+    assert body["msg"] == "已提交取消请求"
+    assert body["data"]["status"] == "cancelling"
+
+
+@pytest.mark.asyncio
+async def test_close_subagent_session_route_releases_quota_and_rejects_active(router_state, monkeypatch):
+    monkeypatch.setattr(conversation_router, "_get_current_user_identity", identity_sync)
+    calls = []
+
+    async def close_session(task_id, *, conversation_id, user_id, operator_name):
+        calls.append((task_id, conversation_id, user_id, operator_name))
+        if task_id == "active":
+            raise SubagentSessionActiveError("该子智能体仍有进行中的任务")
+        if task_id == "missing":
+            return None
+        return SimpleNamespace(session_id="agent-1", status="closed", closed_at=None)
+
+    monkeypatch.setattr(conversation_router.subagent_task_service, "close_session", close_session)
+
+    body = payload(await conversation_router.close_subagent_session("conv_1", "t1", FakeRequest()))
+    assert calls == [("t1", "conv_1", "u1", "用户一")]
+    assert body["data"] == {
+        "task_id": "t1",
+        "session_id": "agent-1",
+        "session_status": "closed",
+        "session_closed_at": None,
+    }
+    assert body["msg"] == "子智能体会话已关闭，额度已释放"
+
+    missing = await conversation_router.close_subagent_session("conv_1", "missing", FakeRequest())
+    assert missing.status_code == 404
+    active = await conversation_router.close_subagent_session("conv_1", "active", FakeRequest())
+    assert active.status_code == 409
+    assert payload(active)["msg"] == "该子智能体仍有进行中的任务"
+
+
+@pytest.mark.asyncio
+async def test_subagent_task_event_stream_route(router_state, monkeypatch):
+    monkeypatch.setattr(conversation_router, "_get_current_user_identity", identity_sync)
+
+    async def get_task(task_id, *, conversation_id=None, user_id=None):
+        return None if task_id == "missing" else _subagent_task_record(status="running")
+
+    async def stream_events(**_kwargs):
+        yield {
+            "stream_id": "1-0",
+            "payload": 'event: subagent_message_delta\ndata: {"delta":"hi"}\n\n',
+        }
+
+    monkeypatch.setattr(conversation_router.subagent_task_service, "get_task", get_task)
+    monkeypatch.setattr(conversation_router.subagent_task_event_service, "stream", stream_events)
+
+    response = await conversation_router.stream_subagent_task_events(
+        "conv_1",
+        "t1",
+        FakeRequest(headers={"Last-Event-ID": "0-0"}),
+    )
+    assert response.media_type == "text/event-stream"
+    assert response.headers["x-chatdata-subagent-task-id"] == "t1"
+    chunks = [chunk async for chunk in response.body_iterator]
+    assert any("id: 1-0" in chunk and "subagent_message_delta" in chunk for chunk in chunks)
+
+    missing = await conversation_router.stream_subagent_task_events("conv_1", "missing", FakeRequest())
+    assert missing.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_subagent_task_trail_snapshot_route(router_state, monkeypatch):
+    monkeypatch.setattr(conversation_router, "_get_current_user_identity", identity_sync)
+
+    def live_record(status="running"):
+        return SimpleNamespace(
+            task_id="t1",
+            status=status,
+            is_terminal=status in {"completed", "failed", "cancelled", "timeout", "interrupted", "lost"},
+            agent_session_id="sess-1",
+        )
+
+    async def get_task(task_id, *, conversation_id=None, user_id=None):
+        return None if task_id == "missing" else live_record()
+
+    call_order: list[str] = []
+
+    async def load_snapshot(*, task_id, agent_session_id):
+        call_order.append("snapshot")
+        assert task_id == "t1"
+        assert agent_session_id == "sess-1"
+        return {
+            "trail": [{"kind": "message", "id": "ai-1", "content": "已完成步骤"}],
+            "compactions": [],
+        }
+
+    async def latest_event_id(task_id):
+        call_order.append("cursor")
+        return "12-0"
+
+    monkeypatch.setattr(conversation_router.subagent_task_service, "get_task", get_task)
+    monkeypatch.setattr(conversation_router, "load_live_trail_snapshot", load_snapshot)
+    monkeypatch.setattr(conversation_router.subagent_task_event_service, "latest_event_id", latest_event_id)
+
+    body = payload(await conversation_router.get_subagent_task_trail("conv_1", "t1", FakeRequest()))
+    assert body["data"] == {
+        "available": True,
+        "trail": [{"kind": "message", "id": "ai-1", "content": "已完成步骤"}],
+        "compactions": [],
+        "cursor": "12-0",
+    }
+    # 游标必须先于快照读取：否则两步之间写入的完成帧会被续传跳过，卡片停在 running。
+    assert call_order == ["cursor", "snapshot"]
+
+    async def no_snapshot(*, task_id, agent_session_id):
+        return None
+
+    monkeypatch.setattr(conversation_router, "load_live_trail_snapshot", no_snapshot)
+    body = payload(await conversation_router.get_subagent_task_trail("conv_1", "t1", FakeRequest()))
+    assert body["data"] == {"available": False}
+
+    async def no_cursor(task_id):
+        return None
+
+    monkeypatch.setattr(conversation_router, "load_live_trail_snapshot", load_snapshot)
+    monkeypatch.setattr(conversation_router.subagent_task_event_service, "latest_event_id", no_cursor)
+    body = payload(await conversation_router.get_subagent_task_trail("conv_1", "t1", FakeRequest()))
+    assert body["data"] == {"available": False}
+
+    monkeypatch.setattr(conversation_router.subagent_task_event_service, "latest_event_id", latest_event_id)
+
+    async def terminal_task(task_id, *, conversation_id=None, user_id=None):
+        return live_record(status="completed")
+
+    monkeypatch.setattr(conversation_router.subagent_task_service, "get_task", terminal_task)
+    body = payload(await conversation_router.get_subagent_task_trail("conv_1", "t1", FakeRequest()))
+    assert body["data"] == {"available": False}
+
+    monkeypatch.setattr(conversation_router.subagent_task_service, "get_task", get_task)
+    missing = await conversation_router.get_subagent_task_trail("conv_1", "missing", FakeRequest())
+    assert missing.status_code == 404

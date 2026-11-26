@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
+import time
 import types
 import zipfile
 from contextlib import asynccontextmanager
@@ -401,18 +403,21 @@ def test_install_rejects_empty_payload(plugin_root):
 
 
 def test_install_cleans_stale_staging_directory(plugin_root):
-    (plugin_root / "cov-plugin.installing").mkdir(parents=True)
+    staging = plugin_root / "cov-plugin.installing"
+    staging.mkdir(parents=True)
+    stale = time.time() - 7200
+    os.utime(staging, (stale, stale))
     manifest = install_plugin_from_zip_bytes(_zip_bytes(_manifest(), files=_skill_file("cov-skill")))
     assert manifest.name == "cov-plugin"
     assert (plugin_root / "cov-plugin" / "plugin.json").is_file()
-    assert not (plugin_root / "cov-plugin.installing").exists()
+    assert not staging.exists()
 
 
 def test_install_fails_when_extraction_lost_manifest(monkeypatch, plugin_root):
     monkeypatch.setattr(installer_module, "_safe_extract", lambda *_args, **_kwargs: None)
     with pytest.raises(PluginInstallError, match="缺少 plugin.json"):
         install_plugin_from_zip_bytes(_zip_bytes(_manifest(), files=_skill_file("cov-skill")))
-    assert not (plugin_root / "cov-plugin.installing").exists()
+    assert not list(plugin_root.glob(".installing-*"))
 
 
 def test_param_docs_without_properties_returns_empty():

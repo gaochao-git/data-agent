@@ -212,8 +212,13 @@ def test_map_filter_node_returns_multiple_leaves_as_list(adapter):
 
 @pytest.mark.parametrize("operator", ["IS NULL", "IS NOT NULL", "EMPTY STRING"])
 def test_validate_filter_value_skips_null_operators(adapter, operator):
-    """空值类运算符不需要右侧值，直接放行（1006->1007）。"""
+    """空值类运算符不需要右侧值直接放行；放行只对精确白名单生效（1006->1007）。"""
     adapter._validate_filter_value({"name": "城市", "operator": operator})
+
+    # 名字相近但不在白名单的运算符缺值仍必须拦，证明不是无条件跳过校验
+    # （同文件另有用 "=" 的通用反例，这里守的是白名单边界）
+    with pytest.raises(ValueError, match="请输入筛选值"):
+        adapter._validate_filter_value({"name": "城市", "operator": "IS EMPTY"})
 
 
 def test_validate_filter_value_requires_field_ref_target(adapter):

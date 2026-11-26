@@ -9,12 +9,14 @@ const props = defineProps({
   usedBytes: { type: Number, default: 0 },
   limitBytes: { type: Number, default: 0 },
   loading: { type: Boolean, default: false },
+  refreshing: { type: Boolean, default: false },
   collapsible: { type: Boolean, default: false },
   fullyCollapsed: { type: Boolean, default: false },
 })
 
 const emit = defineEmits<{
   toggleCollapsed: []
+  refresh: []
 }>()
 
 const usagePercent = computed(() => {
@@ -32,6 +34,17 @@ const usageTone = computed(() => {
 <template>
   <div class="mb-2 flex shrink-0 items-center gap-2 px-1 text-xs" data-console-toolbar>
     <span class="min-w-0 flex-1 truncate font-mono text-xs text-slate-400">{{ props.root }}</span>
+    <button
+      type="button"
+      class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white text-[11px] leading-none text-slate-500 shadow-sm transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-700 active:bg-slate-100 disabled:opacity-50"
+      :title="props.refreshing ? '正在刷新文件和预览' : '刷新文件和预览'"
+      aria-label="刷新文件和预览"
+      data-console-refresh="true"
+      :disabled="props.refreshing"
+      @click="emit('refresh')"
+    >
+      <i class="fa-solid fa-rotate-right" :class="props.refreshing ? 'fa-spin' : ''"></i>
+    </button>
     <button
       v-if="props.collapsible"
       type="button"

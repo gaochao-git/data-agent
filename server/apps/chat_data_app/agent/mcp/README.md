@@ -12,7 +12,7 @@
 | 文件 | 职责 |
 | --- | --- |
 | `config.py` | server 配置解析与校验：当前来源为**已启用插件的 `mcp_servers` 声明**（独立挂载后续提供）；单条非法/未通过准入只告警跳过 |
-| `manager.py` | 会话管理（仅 streamable_http，2.x 门面按需建连用完即关）、工具枚举 TTL 缓存（采纳服务端 ``ttlMs`` 提示）、调用（内建 MRTR ``input_required`` 处理）、健康检查（``tools/list`` 探针——``ping`` 已随 2026-07-28 移除）、LangChain `StructuredTool` 包装 |
+| `manager.py` | 会话管理（仅 streamable_http，2.x 门面按需建连用完即关）、工具枚举 TTL 缓存（采纳服务端 ``ttlMs`` 提示，并按配置指纹提前失效）、调用（内建 MRTR ``input_required`` 处理）、健康检查（``tools/list`` 探针——``ping`` 已随 2026-07-28 移除）、LangChain `StructuredTool` 包装 |
 | `catalog.py` | 工具检索目录（手写 BM25，零新增依赖）+ `mcp_tool_search` 按需检索工具；两级加载的第二级，见下文 |
 
 ## 两级加载（目录 + 按需检索）
@@ -49,8 +49,10 @@ token 估算；MCP 工具描述超过 500 字符时告警（提示插件作者�
 ## 工具命名
 
 挂到模型的工具名统一为 `mcp_<server_id>_<tool>`（清洗为 `[A-Za-z0-9_-]`，上限 64 字符），
-与内置工具名空间隔离，杜绝撞名。因此 MCP 工具不会进入子智能体
-（子智能体只继承内置工具，见 `data_agent.create_agent_from_spec`）。
+与内置工具名空间隔离，杜绝撞名。MCP 实体工具会随 general 子智能体的默认继承
+进入子图（explore 只读白名单不含 MCP）；`mcp_tool_search` / `mcp_tool_call`
+检索网关依赖主图发现中间件，不下发子图。两级检索模式只收敛主图模型可见工具，
+子图直接继承实体工具，见 `data_agent.create_agent_from_spec`。
 
 ## 配置
 
@@ -58,7 +60,7 @@ token 估算；MCP 工具描述超过 500 字符时告警（提示插件作者�
 # server/.env（MCP 连接相关的全局参数）
 CHAT_DATA_MCP_TOOL_TIMEOUT_SECONDS=60       # 全局默认工具超时；插件可按工具覆盖 timeout_ms
 CHAT_DATA_MCP_CONNECT_TIMEOUT_SECONDS=15    # initialize/discover 握手超时，与工具超时分离
-CHAT_DATA_MCP_TOOLS_CACHE_TTL_SECONDS=300   # 工具枚举缓存 TTL
+CHAT_DATA_MCP_TOOLS_CACHE_TTL_SECONDS=300   # 工具枚举缓存 TTL（配置指纹变化时提前失效）
 ```
 
 **配置来源：当前仅插件 `plugin.json` 的 `mcp_servers` 声明**（随插件安装/启停生效）。
@@ -101,9 +103,10 @@ transport 只支持 `streamable_http`（`url`/`headers`）。`stdio`/`sse` 不�
 
 ## 明确不做（v2）
 
-- 不做常驻连接池：每次枚举/调用按需建立会话、用完即关；枚举结果有 TTL 缓存兜开销
+- 不做常驻连接池：每次枚举/调用按需建立会话、用完即关；枚举结果有 TTL + 配置指纹缓存兜开销
   （2026-07-28 远程传输已无状态化，该取舍与新协议方向一致）。
-- MCP 工具不进子智能体；如需只读约束，在 MCP server 侧自行收紧。
+- explore 子智能体不继承 MCP 工具；general 继承 MCP 实体工具，但 MCP 检索网关
+  仍只属于主图。子图侧只读约束由 explore 白名单保证，不在 MCP server 侧重复收紧。
 - 准入只校验顶层 schema（properties/required/类型合法性），嵌套结构与 `$ref` 仍按 Any 透传——
   2026-07-28 已将 inputSchema 放宽到完整 JSON Schema 2020-12，递归校验留待后续版本。
 - MCP 工具不携带内置工具的 `intent` 参数（那是内置工具的用户展示约定）。

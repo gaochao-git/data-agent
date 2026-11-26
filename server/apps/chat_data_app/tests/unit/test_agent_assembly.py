@@ -12,11 +12,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "..
 
 import pytest  # noqa: E402
 
+from apps.chat_data_app.agent.contracts.business_context import BusinessContext  # noqa: E402
 from apps.chat_data_app.agent.data_agent import (  # noqa: E402
     CHAT_DATA_AGENT_SPEC,
     AgentAssemblySpec,
     AgentRunControls,
-    DatasourceContext,
     IdentityContext,
     assemble_tools,
     validate_agent_assembly_spec,
@@ -40,7 +40,7 @@ def _tool_names(tmp_path, *, options=None, spec=None, run_controls=None):
         options or AgentRuntimeOptions(workspace_backend="local"),
         _runtime(tmp_path),
         identity_context=IdentityContext(user_id="u1", operator_name="测试用户"),
-        datasource_context=DatasourceContext(datasource_id="ds_a"),
+        business_context=BusinessContext(values={"datasource_id": "ds_a"}),
         spec=spec,
         run_controls=run_controls,
     )
@@ -316,7 +316,9 @@ def test_write_todos_middleware_uses_compact_chinese_prompt():
     assert "in_progress" in description
     assert "completed" in description
     assert len(system_prompt) <= 400
-    assert "多步任务" in system_prompt
+    assert "write_todos" in system_prompt
+    # 多步任务/in_progress/completed 已由工具描述承担，系统提示不重复
+    assert "多步任务" not in system_prompt
 
 
 def test_sandbox_renewal_callback_only_for_sandbox_backend():

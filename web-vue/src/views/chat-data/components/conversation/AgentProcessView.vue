@@ -7,13 +7,16 @@
  * 一个绑定「最近 tab」的 SubagentTrail。
  */
 import type { PropType } from 'vue'
-import type { ToolCallInfo } from '../../types'
+import type { ExecutionTargetOption, ToolCallInfo } from '../../types'
 import { useToolTiming } from '../../composables/useToolTiming'
 import SubagentTrail from './SubagentTrail.vue'
 
 const props = defineProps({
   toolCall: { type: Object as PropType<ToolCallInfo>, required: true },
   conversationId: { type: String as PropType<string | null>, default: null },
+  datasourceId: { type: String, default: '' },
+  executionTargets: { type: Array as PropType<ExecutionTargetOption[]>, default: () => [] },
+  onSave: { type: Function as PropType<(sql: string, chartType: string, memberDatasourceId?: string, memberDatasourceIds?: string[]) => void>, default: undefined },
   activeToolCallId: { type: String as PropType<string | null>, default: null },
 })
 
@@ -31,10 +34,17 @@ const { elapsedMs, isRunning } = useToolTiming(
   <SubagentTrail
     :tool-call="toolCall"
     :conversation-id="conversationId"
+    :datasource-id="datasourceId"
+    :execution-targets="executionTargets"
+    :on-save="onSave"
     :active-tool-call-id="activeToolCallId"
     :elapsed-ms="elapsedMs"
     :timing-running="isRunning"
     :token-usage="toolCall.subagentTokenUsage || null"
+    :live-speed="toolCall.subagentLiveSpeed || null"
+    :supersteps="toolCall.subagentSupersteps || 0"
+    :recursion-limit="toolCall.subagentRecursionLimit || 0"
+    :live-supersteps="toolCall.subagentLiveSteps || null"
     @select-tool="emit('selectTool', $event)"
   />
 </template>

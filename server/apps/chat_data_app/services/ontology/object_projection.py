@@ -23,7 +23,7 @@ import asyncio
 import os
 import re
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from pymysql.converters import escape_string
@@ -453,7 +453,7 @@ def _coerce_timestamp(value: Any) -> datetime | None:
     if parsed is None:
         return None
     if parsed.tzinfo is not None:
-        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        parsed = parsed.astimezone(UTC).replace(tzinfo=None)
     return parsed
 
 
@@ -1060,9 +1060,7 @@ def _derived_target_column(
     return target_column
 
 
-async def _annotate_list_objects_async(
-    detail: dict[str, Any], objects: list[dict[str, Any]]
-) -> list[dict[str, Any]]:
+async def _annotate_list_objects_async(detail: dict[str, Any], objects: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """列表/搜索口径：剔除已删除实例、给有覆盖值的对象打 `has_overrides` 角标。
 
     与详情保持一致的两件事：删除后对象在任何入口都不可见；列表要能告诉前端
@@ -1075,9 +1073,7 @@ async def _annotate_list_objects_async(
     if not object_type_id:
         return objects
     instance_dao = OntologyObjectInstanceDao()
-    instances = await instance_dao.instances_async(
-        object_type_id, [_text(item.get("object_key")) for item in objects]
-    )
+    instances = await instance_dao.instances_async(object_type_id, [_text(item.get("object_key")) for item in objects])
     visible = [
         item
         for item in objects
@@ -1086,9 +1082,7 @@ async def _annotate_list_objects_async(
     if not visible:
         return visible
     generations = {
-        _text(item.get("object_key")): int(
-            (instances.get(_text(item.get("object_key"))) or {}).get("generation") or 1
-        )
+        _text(item.get("object_key")): int((instances.get(_text(item.get("object_key"))) or {}).get("generation") or 1)
         for item in visible
     }
     overridden = await OntologyActionExecutionDao().overridden_keys_async(

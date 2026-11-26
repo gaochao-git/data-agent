@@ -7,6 +7,7 @@
 import request from '@/utils/request'
 import requestStream from '@/utils/requestStream'
 import { parseSseChunk } from '../utils/sse'
+import type { AdminSkillInfo } from '../utils/skillAdmin'
 import type {
   ApiResponse,
   DataSource,
@@ -59,7 +60,10 @@ import type {
   OntologyObjectTypeItem,
   OntologyObjectTypeStatus,
   OntologyPropertyItem,
-  OntologyRelationTypeItem
+  OntologyRelationTypeItem,
+  SubagentCompaction,
+  SubagentTaskRecord,
+  SubagentTrailItem,
 } from '../types'
 import type { Dashboard } from './dashboard'
 
@@ -891,6 +895,15 @@ export interface ConversationWorkspaceFile {
   dashboard_spec?: unknown
 }
 
+export interface ConversationWorkspaceDirectory {
+  path: string
+  relative_path: string
+  directory: string
+  name: string
+  mtime: number
+  source: string
+}
+
 export interface ConversationWorkspaceUsage {
   used_bytes: number
   limit_bytes: number
@@ -898,8 +911,16 @@ export interface ConversationWorkspaceUsage {
   percentage: number
 }
 
+export interface ConversationWorkspaceFileContent {
+  path: string
+  relative_path: string
+  content: string
+  size: number
+  mtime: number
+}
+
 /** 获取会话工作区文件。 */
-export function getConversationWorkspaceFiles(conversationId: string): Promise<ApiResponse<{ files: ConversationWorkspaceFile[]; usage?: ConversationWorkspaceUsage }>> {
+export function getConversationWorkspaceFiles(conversationId: string): Promise<ApiResponse<{ files: ConversationWorkspaceFile[]; directories?: ConversationWorkspaceDirectory[]; usage?: ConversationWorkspaceUsage }>> {
   return request({
     url: `/agents/api/chatdata/conversations/${conversationId}/workspace-files`,
     method: 'get'
@@ -929,11 +950,29 @@ export function deleteConversationWorkspaceFile(
 }
 
 /** 读取会话工作区文本文件。 */
-export function getConversationWorkspaceFileContent(conversationId: string, path: string, refreshToken?: string): Promise<ApiResponse<{ path: string; relative_path: string; content: string; size: number }>> {
+export function getConversationWorkspaceFileContent(conversationId: string, path: string, refreshToken?: string): Promise<ApiResponse<ConversationWorkspaceFileContent>> {
   return request({
     url: `/agents/api/chatdata/conversations/${conversationId}/workspace-files/content`,
     method: 'get',
     params: refreshToken ? { path: toCanonicalWorkspacePath(path), _refresh: refreshToken } : { path: toCanonicalWorkspacePath(path) }
+  })
+}
+
+/** 保存会话工作区中已存在的文本文件。 */
+export function saveConversationWorkspaceFile(
+  conversationId: string,
+  path: string,
+  content: string,
+  expectedMtime: number,
+): Promise<ApiResponse<{ path: string; bytes: number; mtime: number; saved: boolean }>> {
+  return request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/workspace-files/content`,
+    method: 'put',
+    data: {
+      path: toCanonicalWorkspacePath(path),
+      content,
+      expected_mtime: expectedMtime,
+    },
   })
 }
 
@@ -1013,6 +1052,14 @@ export function uploadFile(conversationId: string, file: File): Promise<ApiRespo
     method: 'post',
     data: formData,
     headers: { 'Content-Type': 'multipart/form-data' }
+  })
+}
+
+/** 删除已上传的附件（同时清理 uploads 文件和 uploaded_files 记录） */
+export function deleteUploadedFile(fileId: string): Promise<ApiResponse<{ file_id: string }>> {
+  return request({
+    url: `/agents/api/chatdata/uploaded-files/${fileId}`,
+    method: 'delete'
   })
 }
 
@@ -1633,12 +1680,12 @@ export function cancelSteerMessage(
 }
 
 /** 读取仍排队的追加消息与运行状态，供页面刷新后恢复展示。 */
-export function listSteerMessages(
+export function getRunState(
   conversationId: string,
 ): Promise<ApiResponse<{
   has_active_run: boolean
   run_id?: string | null
-  run_status?: 'pending' | 'active' | 'cancelling' | 'waiting_user' | 'finished' | 'failed' | 'cancelled' | null
+  run_status?: 'pending' | 'active' | 'cancelling' | 'interrupting' | 'waiting_user' | 'finished' | 'failed' | 'cancelled' | 'interrupted' | null
   next_run_id?: string | null
   turn_id?: string | null
   is_continuation?: boolean
@@ -1659,11 +1706,102 @@ export function listSteerMessages(
   }>
 }>> {
   return request({
-    url: `/agents/api/chatdata/conversations/${conversationId}/steer`,
+    url: `/agents/api/chatdata/conversations/${conversationId}/run-state`,
     method: 'get',
   })
 }
 
+
+/** 读取当前会话的后台子智能体任务；刷新页面后据此恢复任务面板。 */
+export async function listSubagentTasks(
+  conversationId: string,
+  options?: { status?: string; limit?: number },
+): Promise<SubagentTaskRecord[]> {
+  const response = await request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/subagent-tasks`,
+    method: 'get',
+    params: {
+      ...(options?.status ? { status: options.status } : {}),
+      ...(options?.limit ? { limit: options.limit } : {}),
+    },
+  })
+  return Array.isArray(response.data?.tasks) ? response.data.tasks as SubagentTaskRecord[] : []
+}
+
+/** 读取单个任务的完整报告与过程快照。 */
+export async function getSubagentTask(conversationId: string, taskId: string): Promise<SubagentTaskRecord> {
+  const response = await request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/subagent-tasks/${taskId}`,
+    method: 'get',
+  })
+  return response.data as SubagentTaskRecord
+}
+
+/** 请求取消后台任务；跨 worker 在下一次心跳生效。 */
+export async function cancelSubagentTask(conversationId: string, taskId: string): Promise<SubagentTaskRecord> {
+  const response = await request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/subagent-tasks/${taskId}/cancel`,
+    method: 'post',
+  })
+  return response.data as SubagentTaskRecord
+}
+
+export interface CloseSubagentSessionResult {
+  task_id: string
+  session_id: string
+  session_status: 'open' | 'closed'
+  session_closed_at: string | null
+}
+
+/** 用户关闭终态子智能体会话，释放当前主对话的子智能体额度；历史仍可查看。 */
+export async function closeSubagentSession(
+  conversationId: string,
+  taskId: string,
+): Promise<CloseSubagentSessionResult> {
+  const response = await request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/subagent-tasks/${taskId}/close-session`,
+    method: 'post',
+  })
+  return response.data as CloseSubagentSessionResult
+}
+
+export interface SubagentTaskTrailSnapshot {
+  available: boolean
+  trail?: SubagentTrailItem[]
+  compactions?: SubagentCompaction[]
+  cursor?: string
+}
+
+/** 读取运行中任务的过程快照与续传游标；不可用时返回 available=false，由调用方回退全量重放。 */
+export async function getSubagentTaskTrail(
+  conversationId: string,
+  taskId: string,
+): Promise<SubagentTaskTrailSnapshot> {
+  const response = await request({
+    url: `/agents/api/chatdata/conversations/${conversationId}/subagent-tasks/${taskId}/trail`,
+    method: 'get',
+  })
+  return (response.data || { available: false }) as SubagentTaskTrailSnapshot
+}
+
+/** 订阅后台子智能体的实时过程事件；父 Run 结束后仍可继续接收。 */
+export function streamSubagentTaskEvents(
+  conversationId: string,
+  taskId: string,
+  lastEventId = '0-0',
+  signal?: AbortSignal,
+): Promise<Response> {
+  return requestStream({
+    url: `/agents/api/chatdata/conversations/${conversationId}/subagent-tasks/${taskId}/events`,
+    method: 'get',
+    headers: { 'Last-Event-ID': lastEventId },
+    signal,
+  })
+}
+
+
+/** @deprecated 使用 getRunState；保留旧名避免调用方断裂。 */
+export const listSteerMessages = getRunState
 export function getPendingUserQuestion(
   conversationId: string,
 ): Promise<ApiResponse<PendingUserQuestion | null>> {
@@ -1714,18 +1852,17 @@ export function cancelUserQuestion(
   })
 }
 
-/** 获取会话历史（流式接口）。limit 指定时只取尾部窗口，用 beforeSequence 向上翻页。 */
+/** 获取会话历史（流式接口）。limitTurns 指定时按完整轮次取窗口，用 beforeTurnSequence 向上翻页。 */
 export function getConversationHistory(
   conversationId: string,
-  options?: { limit?: number; beforeSequence?: number; strictLimit?: boolean },
+  options?: { limitTurns?: number; beforeTurnSequence?: number },
 ): Promise<Response> {
   return requestStream({
     url: `/agents/api/chatdata/conversations/${conversationId}`,
     params: {
       view: 'timeline',
-      limit: options?.limit,
-      before_sequence: options?.beforeSequence,
-      strict_limit: options?.strictLimit,
+      limit_turns: options?.limitTurns,
+      before_turn_sequence: options?.beforeTurnSequence,
     },
   })
 }
@@ -1738,8 +1875,8 @@ export function getConversationTokenUsageDetail(conversationId: string): Promise
   })
 }
 
-/** 获取历史会话绑定的数据源组。 */
-export function getConversationContext(conversationId: string): Promise<ApiResponse<{ conversation_id: string; datasource_id?: string | null }>> {
+/** 获取历史会话绑定的数据源组与实际使用模型。 */
+export function getConversationContext(conversationId: string): Promise<ApiResponse<{ conversation_id: string; datasource_id?: string | null; model_id?: string | null }>> {
   return request({
     url: `/agents/api/chatdata/conversations/${conversationId}/context`,
     method: 'get',
@@ -1911,6 +2048,19 @@ export function setAdminPluginEnabled(pluginId: string, enabled: boolean): Promi
     url: `${CHATDATA_API_PREFIX}/admin/plugins/${pluginId}/enabled`,
     method: 'put',
     data: { enabled }
+  })
+}
+
+/** 后台：设置插件人员授权（全部用户或指定 username；仅影响插件与插件技能）。 */
+export function setAdminPluginPermissions(
+  pluginId: string,
+  scopeType: 'all' | 'selected',
+  userNames: string[]
+): Promise<ApiResponse<{ name: string; scope_type: 'all' | 'selected'; user_names: string[] }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/plugins/${pluginId}/permissions`,
+    method: 'put',
+    data: { scope_type: scopeType, user_names: userNames }
   })
 }
 
@@ -2565,5 +2715,67 @@ export function setAdminOntologySourceBinding(
     url: `${CHATDATA_API_PREFIX}/admin/meta/ontology/object-types/${encodeURIComponent(objectTypeName)}/source-binding`,
     method: 'put',
     data
+  })
+}
+
+// ============ 后台技能总览（只读） ============
+
+/** 后台：全部技能总览（系统 / 用户 / 插件，跨用户且含停用），只读 */
+export function getAdminSkills(): Promise<ApiResponse<{ skills: AdminSkillInfo[]; total: number }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/skills`,
+    method: 'get'
+  })
+}
+
+/** 后台：任一技能详情（SKILL.md 正文与 references/assets 文件清单），只读 */
+export function getAdminSkill(skillName: string): Promise<ApiResponse<SkillInfo & { content?: string }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/skills/${encodeURIComponent(skillName)}`,
+    method: 'get'
+  })
+}
+
+/** 后台：任一技能版本目录下的文本文件内容，只读；插件技能不提供此能力 */
+export function getAdminSkillFile(
+  skillId: string,
+  params: { dir_name: SkillFileDirName; file_path: string; version_no?: number }
+): Promise<ApiResponse<{ dir_name: string; file_path: string; content: string }>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/skills/${encodeURIComponent(skillId)}/files/content`,
+    method: 'get',
+    params
+  })
+}
+
+/** 后台管理：读取技能版本原始字节文件（图片/PDF 在线预览，返回 Blob）。 */
+export function getAdminSkillVersionRawFile(
+  skillId: string,
+  params: { dir_name: SkillFileDirName; file_path: string; version_no?: number }
+): Promise<Blob> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/skills/${encodeURIComponent(skillId)}/files/raw`,
+    method: 'get',
+    params,
+    responseType: 'blob'
+  }) as unknown as Promise<Blob>
+}
+
+export interface AdminSkillOfficeHtmlPreview {
+  available: boolean
+  reason?: string
+  html?: string
+  truncated?: boolean
+}
+
+/** 后台管理：技能版本 Office 文件的服务端 HTML 预览（复用 OfficeCLI 引擎）。 */
+export function getAdminSkillOfficeHtmlPreview(
+  skillId: string,
+  params: { dir_name: SkillFileDirName; file_path: string; version_no?: number }
+): Promise<ApiResponse<AdminSkillOfficeHtmlPreview>> {
+  return request({
+    url: `${CHATDATA_API_PREFIX}/admin/skills/${encodeURIComponent(skillId)}/files/office-preview`,
+    method: 'get',
+    params
   })
 }

@@ -5,19 +5,28 @@
  * 状态仍由 ConversationWorkspacePanel 持有，通过 WorkspaceFilesContextKey 提供，
  * 这里只做「粗粒度 tab 组件」拆分，不做更细的状态重组。
  */
-import { computed, defineComponent, inject } from 'vue'
+import { computed, defineComponent, inject, unref } from 'vue'
 import ChartSpecRenderer from '../ChartSpecRenderer.vue'
 import MarkdownFilePreview from './MarkdownFilePreview.vue'
 import HtmlPagePreview from './HtmlPagePreview.vue'
 import CodeFilePreview from './CodeFilePreview.vue'
 import MermaidFilePreview from './MermaidFilePreview.vue'
 import OntologyCatalogGraph from './OntologyCatalogGraph.vue'
+import OfficePreviewFrame from './OfficePreviewFrame.vue'
 import { formatToolTableCell } from '../../utils/messageArtifacts'
 import { WorkspaceFilesContextKey } from '../../composables/workspaceFilesContext'
 
 export default defineComponent({
   name: 'FilePreviewTab',
-  components: { ChartSpecRenderer, MarkdownFilePreview, HtmlPagePreview, CodeFilePreview, MermaidFilePreview, OntologyCatalogGraph },
+  components: {
+    ChartSpecRenderer,
+    MarkdownFilePreview,
+    HtmlPagePreview,
+    CodeFilePreview,
+    MermaidFilePreview,
+    OntologyCatalogGraph,
+    OfficePreviewFrame
+  },
   setup() {
     const context = inject(WorkspaceFilesContextKey)
     if (!context) throw new Error('FilePreviewTab 必须在 ConversationWorkspacePanel 内使用')
@@ -25,8 +34,26 @@ export default defineComponent({
     const selectedConsoleIsOntologyCatalog = computed(() =>
       /workspace\/(semantic|ontology)\/_ontology_catalog\.(yaml|yml)$/.test(String((context as any)?.selectedConsoleFilePath?.value || ''))
     )
+    // Office 预览划选标注：把文件路径与选区锚点合并后交给上层面板
+    const handleOfficeAnnotation = (payload: { docPath: string; quote: string; comment: string }) => {
+      const request = context.requestDocumentAnnotation
+      if (typeof request !== 'function') return
+      const filePath = String(unref(context.selectedConsoleFilePath) || '')
+      if (!filePath) return
+      request({ filePath, ...payload })
+    }
+    const updateDocumentAnnotationDraft = (value: string) => {
+      const update = context.updateDocumentAnnotationDraft
+      if (typeof update === 'function') update(value)
+    }
     // 注入的是同一个面板作用域：key 由面板保证齐全，这里按原变量名暴露给模板
-    return { ...context, formatToolTableCell, selectedConsoleIsOntologyCatalog } as Record<string, any>
+    return {
+      ...context,
+      formatToolTableCell,
+      selectedConsoleIsOntologyCatalog,
+      handleOfficeAnnotation,
+      updateDocumentAnnotationDraft
+    } as Record<string, any>
   },
 })
 </script>
@@ -47,7 +74,7 @@ export default defineComponent({
             </span>
           </div>
           <div class="flex shrink-0 items-center gap-2">
-            <div v-if="selectedConsoleFile && (selectedConsoleChartSpec || hasSelectedConsoleTable || selectedConsoleIsMarkdown || selectedConsoleIsMermaid || selectedConsoleIsHtml || selectedConsoleIsOntologyCatalog)" class="flex rounded-md border border-slate-200 bg-white p-0.5">
+            <div v-if="!isWorkspaceFileEditing && selectedConsoleFile && (selectedConsoleChartSpec || hasSelectedConsoleTable || selectedConsoleIsMarkdown || selectedConsoleIsMermaid || selectedConsoleIsHtml || selectedConsoleIsOntologyCatalog)" class="flex rounded-md border border-slate-200 bg-white p-0.5">
               <button
                 v-if="selectedConsoleIsOntologyCatalog"
                 type="button"
@@ -103,10 +130,45 @@ export default defineComponent({
                 源码
               </button>
             </div>
+            <button
+              v-if="canEditSelectedWorkspaceFile && !isWorkspaceFileEditing"
+              type="button"
+              class="flex h-6 items-center justify-center gap-1 rounded border border-slate-200 bg-white px-2 text-[11px] text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
+              title="编辑文件内容"
+              data-console-memory-edit="true"
+              @click="startWorkspaceFileEdit"
+            >
+              <i class="fa-solid fa-pen text-[10px]"></i>
+              <span>编辑</span>
+            </button>
+            <template v-if="isWorkspaceFileEditing">
+              <button
+                type="button"
+                class="flex h-6 items-center justify-center gap-1 rounded border border-blue-200 bg-blue-50 px-2 text-[11px] text-blue-700 transition-colors hover:bg-blue-100 disabled:opacity-50"
+                title="保存文件内容"
+                :disabled="workspaceFileEditorSaving"
+                data-console-memory-save="true"
+                @click="saveWorkspaceFileEdit"
+              >
+                <i class="fa-solid text-[10px]" :class="workspaceFileEditorSaving ? 'fa-spinner fa-spin' : 'fa-floppy-disk'"></i>
+                <span>{{ workspaceFileEditorSaving ? '保存中' : '保存' }}</span>
+              </button>
+              <button
+                type="button"
+                class="flex h-6 items-center justify-center gap-1 rounded border border-slate-200 bg-white px-2 text-[11px] text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700 disabled:opacity-50"
+                title="取消编辑"
+                :disabled="workspaceFileEditorSaving"
+                data-console-memory-cancel="true"
+                @click="cancelWorkspaceFileEdit"
+              >
+                <i class="fa-solid fa-xmark text-[10px]"></i>
+                <span>取消</span>
+              </button>
+            </template>
             <!-- 复制内容/路径：内容口径=预览所见（表格模式=所见表格 TSV，文本类=全文，超大文件受预览截断）。
                  路径=/mnt/user-data 沙箱可见路径（与 @ 引用、智能体视角一致）。 -->
             <button
-              v-if="selectedConsoleFile && !selectedConsoleIsPdf"
+              v-if="!isWorkspaceFileEditing && selectedConsoleFile && !selectedConsoleIsPdf"
               type="button"
               class="flex h-6 w-6 items-center justify-center rounded border border-slate-200 bg-white text-[11px] text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
               title="复制文件内容（表格模式复制 TSV）"
@@ -116,7 +178,7 @@ export default defineComponent({
               <i class="fa-regular fa-copy"></i>
             </button>
             <button
-              v-if="selectedConsoleFile && !selectedConsoleIsPdf"
+              v-if="!isWorkspaceFileEditing && selectedConsoleFile && !selectedConsoleIsPdf"
               type="button"
               class="flex h-6 w-6 items-center justify-center rounded border border-slate-200 bg-white text-[11px] text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
               title="复制文件路径"
@@ -128,7 +190,7 @@ export default defineComponent({
             <!-- 下载已下沉到文件树每行右端（和文件名同处一行，不必先选中再来这里找）。
                  这里改为刷新：tool_result / run 结束本就会自动刷新，此按钮是手动兜底。 -->
             <button
-              v-if="selectedConsoleFile && !selectedConsoleIsPdf"
+              v-if="!isWorkspaceFileEditing && selectedConsoleFile && !selectedConsoleIsPdf"
               type="button"
               class="flex h-6 w-6 items-center justify-center rounded border border-slate-200 bg-white text-[11px] text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700 disabled:opacity-50"
               :title="isWorkspaceRefreshBusy ? '正在刷新' : '刷新文件列表与预览内容'"
@@ -139,7 +201,7 @@ export default defineComponent({
               <i class="fa-solid fa-rotate-right" :class="isWorkspaceRefreshBusy ? 'fa-spin' : ''"></i>
             </button>
             <button
-              v-if="selectedConsoleFile && !selectedConsoleIsPdf"
+              v-if="!isWorkspaceFileEditing && selectedConsoleFile && !selectedConsoleIsPdf"
               type="button"
               class="flex h-6 w-6 items-center justify-center rounded border border-slate-200 bg-white text-[11px] text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
               title="放大预览"
@@ -174,8 +236,17 @@ export default defineComponent({
           >
             <i class="fa-solid fa-compress"></i>
           </button>
+          <textarea
+            v-if="isWorkspaceFileEditing"
+            v-model="workspaceFileEditorDraft"
+            :class="isWorkspaceFilePreviewFullscreen
+              ? 'h-[calc(100vh-48px)] w-full resize-none rounded-md border border-blue-200 bg-white p-3 font-mono text-xs leading-relaxed text-slate-700 outline-none focus:border-blue-400'
+              : 'min-h-0 w-full flex-1 resize-none rounded-md border border-blue-200 bg-white p-3 font-mono text-xs leading-relaxed text-slate-700 outline-none focus:border-blue-400'"
+            spellcheck="false"
+            data-workspace-memory-editor="true"
+          ></textarea>
           <ChartSpecRenderer
-            v-if="selectedConsoleChartSpec && consoleFilePreviewMode === 'render'"
+            v-else-if="selectedConsoleChartSpec && consoleFilePreviewMode === 'render'"
             :spec="selectedConsoleChartSpec"
           />
           <MarkdownFilePreview
@@ -239,17 +310,16 @@ export default defineComponent({
             v-else-if="selectedConsoleIsPdf && loadingWorkspaceFilePath === selectedConsoleFilePath"
             :class="isWorkspaceFilePreviewFullscreen ? 'flex h-[calc(100vh-48px)] items-center justify-center text-xs text-slate-400' : 'flex min-h-0 flex-1 items-center justify-center text-xs text-slate-400'"
           >PDF 加载中...</div>
-          <div
+          <OfficePreviewFrame
             v-else-if="selectedConsoleIsOfficeFile && selectedConsoleOfficeHtml"
-            :class="isWorkspaceFilePreviewFullscreen ? 'h-[calc(100vh-48px)] min-w-0 overflow-auto rounded-md border border-slate-100 bg-white' : 'min-h-0 flex-1 min-w-0 overflow-auto rounded-md border border-slate-100 bg-white'"
-          >
-            <iframe
-              :srcdoc="selectedConsoleOfficeHtml"
-              sandbox="allow-scripts"
-              class="h-full min-w-0 w-full border-0 bg-white"
-              title="Office 文件预览"
-            ></iframe>
-          </div>
+            :html="selectedConsoleOfficeHtml"
+            :file-path="selectedConsoleFilePath"
+            :file-name="selectedConsolePathParts.name"
+            :draft-text="documentAnnotationDraft"
+            :fullscreen="isWorkspaceFilePreviewFullscreen"
+            @add="handleOfficeAnnotation"
+            @update:draft-text="updateDocumentAnnotationDraft"
+          />
           <div
             v-else-if="selectedConsoleIsOfficeFile && loadingOfficePreviewKey === `${conversationId}:${selectedConsoleFilePath}`"
             :class="isWorkspaceFilePreviewFullscreen ? 'flex h-[calc(100vh-48px)] items-center justify-center text-xs text-slate-400' : 'flex min-h-0 flex-1 items-center justify-center text-xs text-slate-400'"

@@ -32,6 +32,7 @@ from apps.chat_data_app.agent.workspace import (
 from apps.chat_data_app.agent.workspace import (
     workspace_sync as we_sync,
 )
+from apps.chat_data_app.agent.workspace.runtime_skill_snapshot import runtime_skills_snapshot_dir_from_workspace
 from apps.chat_data_app.agent.workspace.workspace_sandbox_api import (
     SandboxExecutionSession,
     SandboxExecutionSessionRef,
@@ -48,8 +49,9 @@ from apps.chat_data_app.services.agent_run.conversation_workspace import (
 
 
 def _workspace_root(tmp_path: Path) -> Path:
-    # 新布局：threads/<uid>/<yyyy-MM-DD>/<cid>/{user-data/{workspace,outputs,uploads}, runtime-skills/}
     # 本用例直接手工搭目录传 workspace_root，不经 ensure_conversation_workspace，日期层不参与。
+    # 下方的 runtime-skills 是夹具自建的模拟快照目录（显式传入 runtime_skills_dir），
+    # 不是生产路径；生产快照按用户共享于 threads/<uid>/runtime/skills。
     root = tmp_path / "chat-data" / "threads" / "user_a" / "conv_a" / "user-data"
     for name in ("workspace", "outputs", "uploads"):
         (root / name).mkdir(parents=True, exist_ok=True)
@@ -89,20 +91,20 @@ def test_sandbox_visible_path_allows_workspace_and_flat_skills(tmp_path):
     with pytest.raises(ValueError, match="/mnt/user-data/"):
         sandbox_visible_path("outputs%2Fdashboard.dashboard.json")
     assert (
-        sandbox_visible_path("/mnt/user-data/outputs/.tool-offload/result_1.json")
-        == "/mnt/user-data/outputs/.tool-offload/result_1.json"
+        sandbox_visible_path("/mnt/user-data/workspace/.system/tool-offload/result_1.json")
+        == "/mnt/user-data/workspace/.system/tool-offload/result_1.json"
     )
-    with pytest.raises(ValueError, match="不允许通过文件编辑工具"):
-        sandbox_visible_path("/mnt/user-data/outputs/.tool-offload/result_1.json", writable=True)
+    with pytest.raises(ValueError, match="不允许修改 workspace/.system"):
+        sandbox_visible_path("/mnt/user-data/workspace/.system/tool-offload/result_1.json", writable=True)
     with pytest.raises(ValueError, match="语义模型只读快照"):
-        sandbox_visible_path("/mnt/user-data/workspace/semantic/model.yaml", writable=True)
+        sandbox_visible_path("/mnt/user-data/workspace/.system/semantic/model.yaml", writable=True)
     assert (
         sandbox_visible_path(
-            "/mnt/user-data/workspace/semantic/model.yaml",
+            "/mnt/user-data/workspace/.system/semantic/model.yaml",
             writable=True,
             allow_managed_semantic_model_write=True,
         )
-        == "/mnt/user-data/workspace/semantic/model.yaml"
+        == "/mnt/user-data/workspace/.system/semantic/model.yaml"
     )
     # 扁平模型下无逐技能门控：未知技能路径在路径层被放行（越权由运行时快照文件不存在拦截）。
     assert sandbox_visible_path("/mnt/skills/other-skill/SKILL.md") == "/mnt/skills/other-skill/SKILL.md"
@@ -127,7 +129,7 @@ def test_sandbox_artifact_payload_rejects_hidden_tool_result():
     payload = asyncio.run(
         we_ops.sandbox_artifact_payload(
             session_ref=session_ref,
-            file_path="/mnt/user-data/outputs/.tool-offload/result_1.json",
+            file_path="/mnt/user-data/workspace/.system/tool-offload/result_1.json",
         )
     )
 
@@ -412,7 +414,7 @@ def test_sandbox_file_edit_uses_replace_contents_and_persists_result(monkeypatch
         (we_ops.sandbox_write_text_file, "/mnt/user-data/workspace/report.txt", 666),
         (
             we_ops.sandbox_write_tool_result,
-            "outputs/.tool-offload/result.txt",
+            "workspace/.system/tool-offload/result.txt",
             444,
         ),
     ],
@@ -524,7 +526,7 @@ def test_sandbox_file_copy_rejects_tool_offload_source_and_existing_destination(
         asyncio.run(
             we_ops.sandbox_copy_path(
                 session_ref=session_ref,
-                source_path="/mnt/user-data/outputs/.tool-offload/r.json",
+                source_path="/mnt/user-data/workspace/.system/tool-offload/r.json",
                 destination_path="/mnt/user-data/workspace/e.json",
             )
         )
@@ -593,7 +595,7 @@ def test_sandbox_file_glob_uses_native_files_search_and_includes_tool_results(mo
             captured["entry"] = entry
             return [
                 SimpleNamespace(path="/mnt/user-data/outputs/z-last.json"),
-                SimpleNamespace(path="/mnt/user-data/outputs/.tool-offload/query.json"),
+                SimpleNamespace(path="/mnt/user-data/workspace/.system/tool-offload/query.json"),
                 SimpleNamespace(path="/mnt/user-data/outputs/a-first.json"),
                 SimpleNamespace(path="/tmp/outside.json"),
             ]
@@ -627,7 +629,6 @@ def test_sandbox_file_glob_uses_native_files_search_and_includes_tool_results(mo
     assert captured["entry"].path == "/mnt/user-data/outputs"
     assert captured["entry"].pattern == "*.json"
     assert results == [
-        {"path": "/mnt/user-data/outputs/.tool-offload/query.json", "type": "file"},
         {"path": "/mnt/user-data/outputs/a-first.json", "type": "file"},
         {"path": "/mnt/user-data/outputs/z-last.json", "type": "file"},
     ]
@@ -676,7 +677,7 @@ def test_sandbox_list_dir_delegates_through_real_path(monkeypatch):
                 ],
                 "/mnt/user-data/workspace": [
                     "/mnt/user-data/workspace/a.txt",
-                    "/mnt/user-data/outputs/.tool-offload/query.json",
+                    "/mnt/user-data/workspace/.system/tool-offload/query.json",
                 ],
             }
             return [
@@ -713,15 +714,18 @@ def test_sandbox_list_dir_delegates_through_real_path(monkeypatch):
     )
 
     assert resolved_paths == ["/mnt/user-data/workspace"]
-    assert entries[0]["path"] == "/mnt/user-data/workspace/a.txt"
-    assert entries[0]["type"] == "file"
+    entry_paths = [entry["path"] for entry in entries]
+    assert "/mnt/user-data/workspace/a.txt" in entry_paths
+    a_txt = next(entry for entry in entries if entry["path"] == "/mnt/user-data/workspace/a.txt")
+    assert a_txt["type"] == "file"
     assert any(entry.path == "/mnt/user-data/workspace" and entry.depth == 2 for entry in captured["directory_entries"])
 
 
-def test_local_bash_can_read_only_loaded_skill_path(tmp_path):
+def test_local_bash_can_read_only_loaded_skill_path(tmp_path, monkeypatch):
     # 运行域技能直接来自本会话快照目录，不再经 register_runtime_skill 逐条登记。
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
     workspace_root = _workspace_root(tmp_path)
-    skill_dir = workspace_root.parent / "runtime-skills" / "data-analyzing"
+    skill_dir = runtime_skills_snapshot_dir_from_workspace(str(workspace_root)) / "data-analyzing"
     references = skill_dir / "references"
     references.mkdir(parents=True)
     (references / "guide.md").write_text("guide text\n", encoding="utf-8")
@@ -753,7 +757,7 @@ def test_local_bash_can_read_only_loaded_skill_path(tmp_path):
 
 def test_local_bash_can_read_hidden_tool_result(tmp_path):
     workspace_root = _workspace_root(tmp_path)
-    result_file = workspace_root / "outputs" / ".tool-offload" / "result_1.json"
+    result_file = workspace_root / "workspace" / ".system" / "tool-offload" / "result_1.json"
     result_file.parent.mkdir(parents=True)
     result_file.write_text('{"rows":[1]}', encoding="utf-8")
     runtime = ConversationWorkspaceRuntime(
@@ -764,7 +768,7 @@ def test_local_bash_can_read_hidden_tool_result(tmp_path):
 
     result = asyncio.run(
         bash_run.run_bash_command(
-            command="cat /mnt/user-data/outputs/.tool-offload/result_1.json",
+            command="cat /mnt/user-data/workspace/.system/tool-offload/result_1.json",
             workspace_runtime=runtime,
         )
     )
@@ -918,10 +922,8 @@ def test_prepare_workspace_execution_session_uploads_snapshot_without_volumes(tm
     assert captured["timeout"] == timedelta(seconds=600)
     assert captured["connection_config"].kwargs["request_timeout"] == timedelta(seconds=7)
     assert uploaded["/mnt/user-data/workspace/report.txt"] == (b"report", 666)
-    assert uploaded["/mnt/user-data/workspace/semantic/sc_order.yaml"] == (
-        b"semantic_model: sc_order\n",
-        444,
-    )
+    # 共享工作区里的历史 semantic YAML 一律不上传沙箱；只有 ref 指向的缓存才上传。
+    assert "/mnt/user-data/workspace/.system/semantic/sc_order.yaml" not in uploaded
     assert uploaded["/mnt/user-data/uploads/source.csv"] == (b"id\n1\n", 444)
     assert uploaded["/mnt/skills/demo-skill/SKILL.md"] == (b"# Demo", 444)
     permission_modes = {mode for _, mode in created_directories} | {mode for _, mode in uploaded.values()}
@@ -1030,10 +1032,10 @@ def test_sync_sandbox_uploads_only_transfers_new_upload_files(tmp_path, monkeypa
 def test_mutable_application_manifest_excludes_hidden_results_and_semantic_models(tmp_path):
     workspace_root = _workspace_root(tmp_path)
     (workspace_root / "workspace" / "report.txt").write_text("report", encoding="utf-8")
-    (workspace_root / "workspace" / "semantic").mkdir(parents=True)
-    (workspace_root / "workspace" / "semantic" / "model.yaml").write_text("model", encoding="utf-8")
-    (workspace_root / "outputs" / ".tool-offload").mkdir(parents=True)
-    (workspace_root / "outputs" / ".tool-offload" / "result.json").write_text("result", encoding="utf-8")
+    (workspace_root / "workspace" / ".system" / "semantic").mkdir(parents=True)
+    (workspace_root / "workspace" / ".system" / "semantic" / "model.yaml").write_text("model", encoding="utf-8")
+    (workspace_root / "workspace" / ".system" / "tool-offload").mkdir(parents=True)
+    (workspace_root / "workspace" / ".system" / "tool-offload" / "result.json").write_text("result", encoding="utf-8")
 
     manifest = we_sync._mutable_application_manifest(workspace_root)
 
@@ -1165,6 +1167,30 @@ def test_path_mapping_mask_restores_virtual_paths():
     assert mapping.mask(f"ls {_CLEAN_ROOT}/uploads") == "ls /mnt/user-data/uploads"
 
 
+def test_path_mapping_semantic_prefix_respects_path_segment_boundary(tmp_path):
+    """语义缓存虚拟/物理前缀只能按路径段边界替换，不能吞掉同前缀的兄弟目录。"""
+    cache = tmp_path / "cache" / "semantic" / "u1" / "ds1"
+    mapping = WorkspacePathMapping(workspace_root=_CLEAN_ROOT, semantic_cache_dir=cache)
+
+    cmd = "cat /mnt/user-data/workspace/.system/semantic/model.yaml"
+    translated = mapping.translate(cmd)
+    assert translated == f"cat {cache}/model.yaml"
+    assert mapping.mask(translated) == cmd
+    assert mapping.translate("ls /mnt/user-data/workspace/.system/semantic") == f"ls {cache}"
+
+    for sibling in (
+        "/mnt/user-data/workspace/.system/semantic-backup/a.txt",
+        "/mnt/user-data/workspace/.system/semanticX/a.txt",
+        "/mnt/user-data/workspace/.system/semantic.yaml",
+    ):
+        expected = "cat " + sibling.replace("/mnt/user-data", _CLEAN_ROOT)
+        assert mapping.translate(f"cat {sibling}") == expected
+
+    # 反向遮蔽同样不能把 ds1-backup 当成生效缓存目录
+    sibling_physical = f"{cache}-backup/a.txt"
+    assert mapping.mask(f"cat {sibling_physical}") == f"cat {sibling_physical}"
+
+
 def test_path_mapping_skill_translate_and_mask_roundtrip(tmp_path):
     # 运行域技能：本会话快照目录/<name> <-> 扁平虚拟 /mnt/skills/<name>。
     snapshot_dir = tmp_path / "skills-snapshot" / "data-analyzing"
@@ -1228,3 +1254,16 @@ def test_parse_rg_output_directory_target():
     assert matches[0]["line_number"] == 3
     assert "销售额" in matches[0]["content"]
     assert not has_more
+
+
+def test_path_mapping_semantic_regex_uses_literal_dot(tmp_path):
+    """虚拟语义根按字面量匹配，不能被 . 通配符误改写。"""
+    from utils.workspace_system_paths import SEMANTIC_VIRTUAL_ROOT
+
+    cache = tmp_path / "cache" / "semantic"
+    mapping = WorkspacePathMapping(workspace_root=_CLEAN_ROOT, semantic_cache_dir=cache)
+    assert mapping._virtual_semantic_prefix == SEMANTIC_VIRTUAL_ROOT
+    fake = "/mnt/user-data/workspace/xsystem/ysemantic/model.yaml"
+    translated = mapping.translate(fake)
+    assert str(cache) not in translated
+    assert translated.endswith("/workspace/xsystem/ysemantic/model.yaml")

@@ -229,8 +229,10 @@ export interface ChatDataTokenUsage {
   cumulative_input_tokens?: number
   current_cached_input_tokens?: number
   current_actual_input_tokens?: number
+  actual_input_calls?: number
   cumulative_cached_input_tokens?: number
   cumulative_actual_input_tokens?: number
+  input_tokens_source?: 'actual' | 'estimated'
   current_cache_hit_rate?: number
   cumulative_cache_hit_rate?: number
   output_tokens?: number
@@ -355,7 +357,11 @@ export interface ConversationItem {
   agent_id?: string
   datasource_id?: string
   is_favorited?: boolean
-  run_status?: 'pending' | 'active' | 'cancelling' | 'waiting_user' | 'finished' | 'failed' | 'cancelled' | null
+  run_status?: 'pending' | 'active' | 'cancelling' | 'interrupting' | 'waiting_user' | 'finished' | 'failed' | 'cancelled' | 'interrupted' | null
+  /** 最近一次成功完成时间（ISO 8601，带服务端时区偏移）；未读判断由浏览器本地记录，不落库。 */
+  last_finished_at?: string | null
+  /** 前端根据 last_finished_at 与本地已读时间计算，不来自后端。 */
+  has_unread_completion?: boolean
 }
 
 export interface ConversationGroupPage {
@@ -378,6 +384,25 @@ export interface ConversationGroupView {
   is_loading_more?: boolean
 }
 
+/** 文档标注：Office 预览里划选后引用，携带 OfficeCLI 文档内定位与问题/要求。 */
+export interface DocumentAnnotation {
+  id: string
+  /** 会话工作区相对路径（uploads/、workspace/、outputs/ 三根之一）。 */
+  filePath: string
+  /** OfficeCLI 文档内定位，如 /body/p[4]、/slide[1]、/Sheet1/A1。 */
+  docPath: string
+  quote?: string
+  comment: string
+}
+
+/** 文档标注的请求体形状（snake_case 对齐后端 options.annotations）。 */
+export interface DocumentAnnotationRequest {
+  file_path: string
+  doc_path: string
+  quote?: string
+  comment: string
+}
+
 // 消息
 export interface Message {
   id: string
@@ -398,6 +423,8 @@ export interface Message {
   fileSelections?: string[]
   /** 用户消息划选引用的助手回复片段（id 供前端 key，本地发送与历史回放共用）。 */
   quotedSnippets?: Array<{ id: string; text: string }>
+  /** 用户消息附带的文档选中内容（Office 预览划选后添加）。 */
+  documentAnnotations?: DocumentAnnotation[]
   skills?: Array<Pick<SkillInfo, 'name' | 'title' | 'description'>>
   // 用户消息附带的文件信息（上传文件或超长输入转文件）
   attachments?: MessageAttachment[]
@@ -432,6 +459,10 @@ export interface MessageGenerationStats {
   totalDurationMs?: number
   /** llm 首 token 耗时（毫秒，覆盖首 token 的模型调用起点 → 首个可见 payload；缺失时省略） */
   modelFirstTokenMs?: number
+  /** 本轮图推进次数（每次 run 从 0 起；与 recursion_limit 同一口径） */
+  supersteps?: number
+  /** 本轮递归上限（运行期配置值；缺失时只显示步数） */
+  recursionLimit?: number
 }
 
 // 用户消息附件（文件卡片展示用）
@@ -482,6 +513,9 @@ export interface VisualizationConfig {
   y_field?: string
 }
 
+// 工具状态：主对话工具卡、子智能体过程条目与后端工具事件共用同一口径
+export type ToolStatus = 'generating' | 'running' | 'completed' | 'error' | 'cancelled'
+
 // 工具调用信息
 export interface ToolCallInfo {
   tool_call_id: string
@@ -498,7 +532,13 @@ export interface ToolCallInfo {
   removedLines?: number
   // 流式提取的调用意图（args 未解析前由 tool_progress 事件提前推送，长耗时工具执行中即可展示）
   streamingIntent?: string
-  status: 'generating' | 'running' | 'completed' | 'error'
+  status: ToolStatus
+  // 工具参数生成过程的原始 JSON 增量（tool_args_delta），仅在 argsStreaming=true 时展示
+  argsText?: string
+  // 是否正在生成参数：结束后切回 args 的结构化展示
+  argsStreaming?: boolean
+  // 预览是否因长度上限被截断（后端最多下发 8000 字符）
+  argsTruncated?: boolean
   // 关联的渲染内容
   renderId?: string
   renderType?: 'queryResult' | 'chart'
@@ -509,15 +549,25 @@ export interface ToolCallInfo {
   // 工具执行起止时间（epoch 毫秒，后端 ToolTimingMiddleware 盖章）：耗时由两者相减得出
   started_at_ms?: number | null
   ended_at_ms?: number | null
-  // 子智能体内部过程（task 卡片下方独立区域，按真实发生顺序交错展示）
+  // 子智能体内部过程（subagent 卡片下方独立区域，按真实发生顺序交错展示）
   subagentTrail?: SubagentTrailItem[]
   // 子智能体上下文用量快照（subagent_context_usage 事件实时更新，最终值随
-  // task 结果持久化、历史回放还原）：task 卡片标题行显示「上下文 N%」徽标
+  // subagent 结果持久化、历史回放还原）：subagent 卡片标题行显示「上下文 N%」徽标
   subagentContextUsage?: SubagentContextUsage
-  // 子智能体 token 用量（billing 口径，主对话统计不含它）：随 task 结果持久化
+  // 子智能体 token 用量（billing 口径，主对话统计不含它）：随 subagent 结果持久化
   subagentTokenUsage?: SubagentTokenUsage
+  /** 子智能体运行中的实时滑窗速率（与主对话同算法） */
+  subagentLiveSpeed?: number
+  /** 子智能体运行中已推进的图步数（每次派发从 0 起） */
+  subagentLiveSteps?: number
+  /** 子智能体本次派发的图推进次数（完成后随结果持久化） */
+  subagentSupersteps?: number
+  /** 子智能体本次派发的递归上限（与主图同一配置） */
+  subagentRecursionLimit?: number
   // 子图上下文压缩事件（静默压缩的可视化记录）
   subagentCompactions?: SubagentCompaction[]
+  // 子智能体任务错误（后台任务账本的 task.error；主对话助手气泡同款错误行）
+  subagentError?: string
   // 子图上下文计量明细（cache/breakdown，与主对话 token_usage 同结构）
   subagentTokenUsageDetail?: ChatDataTokenUsage
 }
@@ -525,7 +575,7 @@ export interface ToolCallInfo {
 /**
  * 子智能体上下文用量快照。
  * - `percent`：占**模型上下文窗口**比例，与主对话「上下文 N%」同口径；
- * - `budget_percent`：占**收尾阈值**（窗口 × 压缩触发比例）比例，≥100 触发提前收尾；
+ * - `budget_percent`：占**压缩触发阈值**（窗口 × 压缩触发比例）比例；
  * - 旧会话快照没有窗口字段，只有 `percent`（当时是预算口径）→ 回放时归一到 `budget_percent`。
  */
 export interface SubagentContextUsage {
@@ -541,12 +591,16 @@ export interface SubagentContextUsage {
  * 主对话的 token 统计只算主图模型调用，这是一份独立的子智能体消耗汇总。
  */
 export interface SubagentTokenUsage {
+  /** 最后一次子图模型调用的模型名（后端 usage 记录提取） */
+  model?: string
   input_tokens?: number
   output_tokens?: number
   total_tokens?: number
   cache_read_input_tokens?: number
   cache_creation_input_tokens?: number
   reasoning_tokens?: number
+  /** 输出 token ÷ 子图模型调用时长；模型未盖章起止时间时省略 */
+  tokens_per_second?: number
 }
 
 /** 子图上下文压缩记录（每条一次完成的压缩）。 */
@@ -569,7 +623,16 @@ export interface SubagentTrailItem {
   tool_name?: string
   args?: Record<string, unknown>
   result?: string
-  status?: 'running' | 'completed' | 'error'
+  status?: ToolStatus
+  // tool：参数生成过程的原始 JSON 增量（tool_args_delta 拼接）
+  argsText?: string
+  argsStreaming?: boolean
+  argsTruncated?: boolean
+  // file_write / file_edit：流式参数统计的写入/移除行数（与主对话工具卡同口径）
+  contentLines?: number
+  removedLines?: number
+  // 参数生成期间提前推送的工具意图，args 尚未解析完成时用于展示
+  streamingIntent?: string
   // 文本条目
   content?: string
   truncated?: boolean
@@ -580,11 +643,105 @@ export interface SubagentTrailItem {
   started_at_ms?: number | null
   ended_at_ms?: number | null
   // compaction 条目：子图压缩分隔卡（与主对话同款 CompactionMessage）
+  // compressing=true 表示「压缩中」占位：只存在于实时流，不写入历史/结果快照
+  compressing?: boolean
   timestamp?: string
   estimated_tokens_before?: number
   estimated_tokens_after?: number
   estimated_cleared_tokens?: number
   compressed_messages?: number
+}
+
+export type SubagentTaskStatus =
+  | 'pending'
+  | 'running'
+  | 'cancelling'
+  | 'waiting_approval'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'timeout'
+  | 'interrupted'
+  | 'lost'
+
+export interface SubagentTaskProgress {
+  phase?: string
+  tool_calls?: number
+  running_tools?: number
+  message_count?: number
+  last_tool?: string
+  /** 运行期「正在压缩上下文」标记：started 已到、completed 未到才为 true。 */
+  compressing?: boolean
+  /** 运行期已完成压缩次数；终态以记录上的 compaction_count 为准。 */
+  compaction_count?: number
+  /** 当前派发已推进的图步数（每次派发归零）；终态以 result_meta 同名字段为准。 */
+  supersteps?: number
+  recursion_limit?: number
+  /** 运行期上下文快照；列表接口不返回 result_meta，卡片用它展示实时占比。 */
+  context_usage?: SubagentContextUsage
+  updated_at?: string
+  finished_at?: string
+}
+
+export interface SubagentTaskResultMeta {
+  tool_status?: string
+  trail_items?: number
+  subagent_trail?: SubagentTrailItem[]
+  subagent_context_usage?: SubagentContextUsage
+  subagent_token_usage?: SubagentTokenUsage
+  subagent_token_usage_detail?: ChatDataTokenUsage
+  subagent_compactions?: SubagentCompaction[]
+  subagent_supersteps?: number
+  subagent_recursion_limit?: number
+  [key: string]: unknown
+}
+
+/** 子智能体任务账本（列表接口不含 report/result_meta，详情接口返回完整字段）。 */
+export interface SubagentTaskRecord {
+  task_id: string
+  conversation_id: string
+  parent_run_id: string
+  parent_tool_call_id: string
+  /** 上一轮任务 ID；空表示子会话首轮。 */
+  parent_task_id?: string | null
+  /** 兼容字段：子会话 ID（等于首轮 task_id）；新代码优先用 agent_session_id。 */
+  root_task_id?: string
+  /** 智能体树节点 ID；当前扁平模型下与子会话同 ID。 */
+  agent_id?: string
+  /** 子智能体记忆容器 ID，同一智能体的所有追问共享。 */
+  agent_session_id?: string
+  /** 派生该智能体的父节点；空表示由主智能体直接派生。 */
+  parent_agent_id?: string | null
+  /** 所在智能体树的根节点 ID。 */
+  root_agent_id?: string
+  /** 智能体树深度；主智能体直接派生的子智能体为 1。 */
+  depth?: number
+  /** 第几轮对话，首轮为 1。 */
+  turn_index?: number
+  subagent_type: string
+  label: string
+  description: string
+  status: SubagentTaskStatus
+  status_label: string
+  /** 子智能体逻辑会话状态：closed 后历史仍可查看，但不能继续追问。 */
+  session_status?: 'open' | 'closed'
+  session_closed_at?: string | null
+  /** sync=当前轮同步等待；background=后台独立执行。旧接口缺省按后台处理。 */
+  execution_mode?: 'sync' | 'background'
+  /** 本任务已完成的上下文压缩次数（列表接口摘要字段，不含完整 result_meta）。 */
+  compaction_count?: number
+  pending_interrupt?: Record<string, unknown> | null
+  progress: SubagentTaskProgress
+  created_at: string | null
+  updated_at: string | null
+  started_at: string | null
+  finished_at: string | null
+  notified_at: string | null
+  timeout_seconds: number
+  report?: string
+  report_path?: string
+  error?: string
+  result_meta?: SubagentTaskResultMeta
 }
 
 // 消息内容片段（用于按顺序渲染文本和工具调用）
@@ -661,7 +818,7 @@ export interface ChatDataOptions {
 export type SidebarTab = 'dashboards' | 'config' | 'history'
 
 // SSE 事件类型
-export type SSEEventType = 'message' | 'message_end' | 'token_usage' | 'generation_speed' | 'context_compression' | 'thinking' | 'tool' | 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_context_usage' | 'subagent_context_compression' | 'inbox_admitted' | 'question_requested' | 'error' | 'done' | 'dashboard_spec'
+export type SSEEventType = 'message' | 'message_end' | 'heartbeat' | 'token_usage' | 'generation_speed' | 'run_steps' | 'context_compression' | 'conversation_title_updated' | 'thinking' | 'tool' | 'tool_started' | 'tool_args_delta' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_generation_speed' | 'subagent_steps' | 'subagent_context_usage' | 'subagent_context_compression' | 'subagent_task_updated' | 'inbox_admitted' | 'question_requested' | 'error' | 'done' | 'dashboard_spec'
 
 export interface UserQuestionOption {
   label: string
@@ -704,9 +861,6 @@ export interface UserQuestionAnswer {
   skipped?: boolean
 }
 
-// 工具状态
-export type ToolStatus = 'running' | 'completed' | 'error'
-
 // 工具事件数据
 export interface ToolEventData {
   tool_name: string
@@ -724,11 +878,11 @@ export interface ToolEventData {
 }
 
 export interface ToolLifecycleEventData extends ToolEventData {
-  type: 'tool_started' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_context_usage' | 'subagent_context_compression'
+  type: 'tool_started' | 'tool_args_delta' | 'tool_progress' | 'tool_completed' | 'tool_failed' | 'subagent_message' | 'subagent_message_delta' | 'subagent_thinking_delta' | 'subagent_generation_speed' | 'subagent_steps' | 'subagent_context_usage' | 'subagent_context_compression'
   progress?: number
   accumulated_args?: Record<string, unknown>
   content?: string
-  // 子智能体内部过程事件：所属 task 工具调用的 ID（前端据此嵌套展示）
+  // 子智能体内部过程事件：所属 subagent 工具调用的 ID（前端据此嵌套展示）
   parent_tool_call_id?: string
   // 子智能体中间文本输出的稳定 ID（message 条目去重）
   message_id?: string
@@ -736,21 +890,39 @@ export interface ToolLifecycleEventData extends ToolEventData {
   truncated?: boolean
   // 流式增量（subagent_message_delta / subagent_thinking_delta）
   delta?: string
-  // 完整消息已通过增量流出：收敛时前端只补截断标记，不覆盖内容
+  // tool_args_delta：参数生成结束的轻量收口标记（无 delta，不重复下发完整参数）
+  done?: boolean
+  // 完整消息已通过增量流出：收敛时前端按「更长者优先」补齐，截断预览不覆盖更长全文
   streamed?: boolean
+  // 完整消息事件携带的思考全文：晚加入的订阅者没收到增量时用来补齐 thinking
+  thinking?: string
+  thinking_truncated?: boolean
   // tool_progress：file_write/file_edit 流式生成时的实时行数
   content_lines?: number
   // tool_progress：file_edit 整段替换口径下的被移除行数（old_content）
   removed_lines?: number
   // tool_progress：流式提取的调用意图（args 未解析前提前推送，长耗时工具执行中即可展示）
   intent?: string
+  // tool_progress / 子图 tool_started：args 是最终调用参数的完整快照，前端整份替换而不是合并
+  replace_args?: boolean
   /** subagent_context_compression：压缩记录 id（去重） */
   id?: string
-  // subagent_context_usage：子图上下文用量快照（每个节点更新后推送一次，最终值随 task 结果持久化）
+  /** subagent_context_compression：started=压缩中占位，completed=完成分隔卡 */
+  phase?: 'started' | 'completed'
+  // subagent_context_usage：子图上下文用量快照（每个节点更新后推送一次，最终值随 subagent 结果持久化）
   used_tokens?: number
   threshold_tokens?: number
-  /** task 完成事件：子图 token 用量（billing 口径） */
+  /** subagent 完成事件：子图 token 用量（billing 口径） */
   subagent_token_usage?: SubagentTokenUsage
+  /** subagent 完成事件：本次派发的图推进次数与递归上限 */
+  subagent_supersteps?: number
+  subagent_recursion_limit?: number
+  /** subagent_generation_speed：与主对话同口径的实时滑窗速率 */
+  tokens_per_second?: number
+  /** subagent_steps：当前派发已推进的图步数（每次派发从 0 起） */
+  supersteps?: number
+  recursion_limit?: number
+  window_ms?: number
   /** subagent_context_usage：子图上下文计量明细（与主对话 token_usage 同结构） */
   token_usage_detail?: ChatDataTokenUsage
   /** subagent_context_compression：一次完成的子图压缩记录 */
@@ -761,7 +933,7 @@ export interface ToolLifecycleEventData extends ToolEventData {
   context_window?: number
   /** 占模型上下文窗口比例（与主对话同口径） */
   percent?: number
-  /** 占收尾阈值比例（100% 触发提前收尾） */
+  /** 占压缩触发阈值比例 */
   budget_percent?: number
 }
 
@@ -1007,6 +1179,7 @@ export interface AgentScheduleItem {
   succeeded_count?: number
   failed_count?: number
   cancelled_count?: number
+  interrupted_count?: number
   skipped_count?: number
   last_plan_time?: string | null
   last_run_status?: string | null
@@ -1019,7 +1192,7 @@ export interface AgentScheduleRunItem {
   user_id: string
   conversation_id: string
   plan_time: string | null
-  status: 'pending' | 'claimed' | 'dispatched' | 'succeeded' | 'failed' | 'cancelled' | 'skipped'
+  status: 'pending' | 'claimed' | 'dispatched' | 'finished' | 'failed' | 'cancelled' | 'interrupted' | 'skipped'
   trigger_type: 'schedule' | 'manual'
   run_id: string
   run_status: string | null
@@ -1041,6 +1214,7 @@ export interface AgentScheduleOverview {
   succeeded_runs: number
   failed_runs: number
   cancelled_runs: number
+  interrupted_runs: number
   skipped_runs: number
   running_runs: number
   runs_last_24h: number
@@ -1252,6 +1426,8 @@ export interface PluginManifestInfo {
 // 后台插件列表条目（manifest + 运行状态 + DB 审计字段）
 export interface PluginInfo extends PluginManifestInfo {
   enabled: boolean
+  scope_type: 'all' | 'selected'
+  user_names: string[]
   create_by_name?: string
   create_time?: string
 }

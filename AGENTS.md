@@ -26,6 +26,12 @@
 - 依赖：`web-vue/package.json`
 - 环境变量示例：`web-vue/.env.example`
 
+### 2.3 本地进程重载（macOS）
+- 本地 gunicorn **不要用 SIGHUP 重载**（`kill -HUP <master>`）：SIGHUP 只重启 worker、不更换 master；在 macOS 上 fork 新 worker 还可能触发 ObjC/Swift 的 fork 安全检查，worker 直接 SIGABRT，日志关键字为 `objc_initializeAfterForkError`。
+- 正确方式：Ctrl+C 等 master 完全退出后重新执行启动命令；脚本中用 `kill -TERM <master_pid>` 停止后再拉起。
+- 确认 `server/gunicorn.conf.py` 的 `preload_app = False`，启动命令不要加 `--preload`，也不要通过 `GUNICORN_CMD_ARGS` 注入 preload。
+- 仅本地临时调试可设置 `export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES` 绕过检查；该变量只是规避崩溃，不是根因修复，生产环境不要设置。
+
 详细步骤参考：
 - `server/README.md`
 - `web-vue/README.md`
@@ -96,6 +102,20 @@
 - 跨组件层级的 z-index 一律引用 `web-vue/src/views/chat-data/styles/z-index.css` 中的 `--z-*` CSS 变量（模块内唯一事实来源，随 chat-data 目录拷贝）：样式表写 `z-index: var(--z-*)`，Tailwind 类写 `z-[var(--z-*)]`；EP 组件的 `:z-index` prop 只接受 number，使用 `web-vue/src/views/chat-data/utils/zIndex.ts` 的 `Z_INDEX` 常量镜像，改值必须与 z-index.css 两处同步。
 - 2000~2999 是 Element Plus PopupManager 的动态分配区（首个弹层 2001 起递增）：业务整页容器若落在该区间之上，必须同步把依赖的 EP 弹层显式抬高，否则弹窗（含遮罩）会被压在容器之下（参考 `pages/index.vue` 的 MessageBox 修复注释与 `.el-overlay.is-message-box` 规则）。
 - 组件内部相对排序的小层级（1~320，如 sticky 表头、局部浮层）不纳入变量管理，直接写数字；新增跨组件层级时必须先在 z-index.css 归位到对应分层再引用，禁止直接写魔法数字。
+
+### 4.6 工程协作纪律（参考 pi.dev AGENTS.md，适配本仓技术栈）
+
+- 用户提问时，**先回答问题**，再做修改或跑实现命令。
+- 回应反馈或分析时，先明确说**同意还是不同意**，再说改了什么。
+- 解释设计或问题用固定结构：**问题 → 具体例子或短 trace → 方案**，并说明方案为什么必要、哪些是可选复杂度。
+- **移除看起来有意图的功能或代码前，先询问**——即使它看起来是死代码；拿不准就标记并留待确认，不静默删除。
+- 大范围修改前、修改未完整读过的文件前，**先完整读文件**，不依赖搜索片段下结论；提交前以陌生人视角通读每个改过的文件，不跳读也要能看懂。
+- 校验只发生在**信任边界**（pydantic/schema 入口、线上输入）：类型已保证的内部值不再做防御性 isinstance/shape 检查；剩余的运行时检查必须注明它守护的边界。
+- 只有一个调用点的单行 helper 直接内联；同一逻辑不写两遍。
+- 前端大组件**按概念分文件，不按大小**：一个概念可以长（约 1000 行内合理），出现第二个概念才是分拆理由（Conversation.vue 的教训）。
+- 不为了消类型错误而删除功能或降级依赖——升级依赖或修类型，不顺手砍代码。
+- 改代码后跑 `scripts/verify --fast`，修完所有 error/warning/info 再提交；创建了测试文件就跑通它。
+- 临时脚本写到系统临时目录（如 `/tmp`），运行、按需修改、用完删除；不在 bash 命令里内嵌多行脚本。
 
 ## 5. 目录与文件约定
 

@@ -592,6 +592,34 @@ async def sandbox_write_text_file(
         }
 
 
+async def sandbox_write_binary_file(
+    *, session_ref: SandboxExecutionSessionRef, file_path: str, data: bytes
+) -> dict[str, Any]:
+    """写入二进制内容（如 data2image 生成的图表 PNG）；复用沙箱 Files API 字节写入。"""
+    session = require_sandbox_session(session_ref)
+    async with session.operation_lock:
+        await _recover_pending_persistence(session)
+        target = await _resolve_sandbox_real_path(session=session, file_path=file_path, writable=True)
+        parent = str(PurePosixPath(target).parent)
+        await _create_sandbox_directories(
+            sandbox=session.sandbox,
+            paths=[parent],
+            mode=_SANDBOX_WRITABLE_DIRECTORY_MODE,
+        )
+        await _write_sandbox_file(
+            sandbox=session.sandbox,
+            path=target,
+            data=data,
+            mode=_SANDBOX_WRITABLE_FILE_MODE,
+        )
+        await _persist_sandbox_paths(session=session, changed_paths=[target])
+        return {
+            "operation": "write",
+            "file_path": sandbox_path_to_visible(target),
+            "bytes": len(data),
+        }
+
+
 async def sandbox_write_internal_text_files(
     *,
     session_ref: SandboxExecutionSessionRef,
@@ -635,7 +663,7 @@ async def sandbox_write_internal_text_files(
         )
         await _persist_sandbox_paths(
             session=session,
-            changed_paths=[target for target, _ in targets],
+            changed_paths=[target for target, _ in targets if not _is_managed_semantic_model_sandbox_path(target)],
         )
         results: list[dict[str, Any]] = [
             {
@@ -663,7 +691,7 @@ def _resolve_sandbox_target_for_batch(session: SandboxExecutionSession, file_pat
         allow_managed_semantic_model_write=True,
     )
     if not _is_managed_semantic_model_sandbox_path(target):
-        raise ValueError("系统批量写入仅允许 /mnt/user-data/workspace/semantic/ 下的 YAML 语义模型文件")
+        raise ValueError("系统批量写入仅允许 /mnt/user-data/workspace/.system/semantic/ 下的 YAML 语义模型文件")
     return target
 
 
@@ -686,7 +714,7 @@ async def sandbox_delete_internal_text_file(
             allow_managed_semantic_model_write=True,
         )
         if not _is_managed_semantic_model_sandbox_path(target):
-            raise ValueError("系统删除仅允许 /mnt/user-data/workspace/semantic/ 下的 YAML 语义模型文件")
+            raise ValueError("系统删除仅允许 /mnt/user-data/workspace/.system/semantic/ 下的 YAML 语义模型文件")
         files = getattr(session.sandbox, "files", None)
         deleter = getattr(files, "delete_files", None)
         if not callable(deleter):

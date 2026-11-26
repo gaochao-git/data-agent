@@ -16,6 +16,8 @@ def _init_app() -> None:
     global router
     try:
         from .agent import get_data_agent_graph
+        from .agent.contracts.subagent_task import register_subagent_task_service
+        from .agent.run.subagent_task_service import subagent_task_service
         from .agent_stream import sql_completion_handler
         from .routers.conversations import (
             register_agent,
@@ -26,6 +28,8 @@ def _init_app() -> None:
         traceback.print_exc()
         raise
 
+    # Port 绑定由应用启动入口统一完成，避免实现模块 import 时产生注册副作用。
+    register_subagent_task_service(subagent_task_service)
     router = app_router
     register_agent(
         agent_id=AGENT_ID,

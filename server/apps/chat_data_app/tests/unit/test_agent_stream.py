@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sys
@@ -5,6 +6,7 @@ from types import SimpleNamespace
 
 import httpx
 import openai
+from langgraph.errors import GraphRecursionError
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
@@ -64,6 +66,32 @@ def _tool_event_contents(events: list[str]) -> list[str]:
 def test_resolve_active_tool_call_id_prefers_chunk_id():
     running = ["tool_a", "tool_b"]
     assert _resolve_active_tool_call_id("tool_c", "tool_b", running) == "tool_c"
+
+
+def test_usage_aux_stats_prefers_complete_actual_input_tokens():
+    usage = {
+        "cumulative_input_tokens": 600,
+        "cumulative_actual_input_tokens": 720,
+        "input_tokens_source": "actual",
+        "output_tokens": 60,
+    }
+
+    stats = agent_stream_module._usage_aux_stats(usage)
+
+    assert stats["input_tokens"] == 720
+
+
+def test_usage_aux_stats_falls_back_to_estimated_input_tokens():
+    usage = {
+        "cumulative_input_tokens": 600,
+        "cumulative_actual_input_tokens": 120,
+        "input_tokens_source": "estimated",
+        "output_tokens": 60,
+    }
+
+    stats = agent_stream_module._usage_aux_stats(usage)
+
+    assert stats["input_tokens"] == 600
 
 
 def test_resolve_active_tool_call_id_uses_current_active_when_chunk_id_missing():
@@ -145,8 +173,9 @@ def test_reasoning_and_thinking_helper_branches():
     assert "data_analyzing_tool" not in tool_thinking_event
     assert _format_reasoning_for_display("调用 data_analyzing_tool") == "调用 数据分析"
     assert _format_reasoning_for_display("调用 get_current_time") == "调用 获取当前时间"
-    # 短工具名（task）只按词边界替换，不能命中 subtask / task_id / tasks 等长词的子串
-    assert _format_reasoning_for_display("派发 task 处理") == "派发 派发子智能体 处理"
+    # 工具名只按词边界替换，不能命中 subtask / task_id / tasks 等长词的子串
+    assert _format_reasoning_for_display("派发 subagent 处理") == "派发 子智能体 处理"
+    assert _format_reasoning_for_display("派发 task 处理") == "派发 task 处理"
     assert _format_reasoning_for_display("拆成 3 个 subtask 分别处理") == "拆成 3 个 subtask 分别处理"
     assert _format_reasoning_for_display("先记录 task_id，再调用工具") == "先记录 task_id，再调用工具"
     assert _format_reasoning_for_display("这些 tasks 是独立的") == "这些 tasks 是独立的"
@@ -181,9 +210,9 @@ def test_normalize_enable_thinking_branches():
 def test_validate_workspace_file_selections_filters_invalid(tmp_path):
     root = tmp_path / "user-data"
     (root / "uploads").mkdir(parents=True)
-    (root / "outputs" / "query_result").mkdir(parents=True)
+    (root / "workspace" / ".system" / "query_result").mkdir(parents=True)
     (root / "uploads" / "a.pdf").write_text("data", encoding="utf-8")
-    (root / "outputs" / "query_result" / "r.json").write_text("{}", encoding="utf-8")
+    (root / "workspace" / ".system" / "query_result" / "r.json").write_text("{}", encoding="utf-8")
     root_str = str(root)
 
     # 合法文件保留；不存在/系统结果区/越界路径丢弃；按序去重
@@ -191,7 +220,7 @@ def test_validate_workspace_file_selections_filters_invalid(tmp_path):
         [
             "uploads/a.pdf",
             "uploads/missing.pdf",
-            "outputs/query_result/r.json",
+            "workspace/.system/query_result/r.json",
             "uploads/a.pdf",
             "../../etc/passwd",
             "/abs/path.pdf",
@@ -295,6 +324,17 @@ def test_parse_tool_args_buffer_unwraps_double_encoded_json():
     assert _parse_tool_args_buffer("raw-string", fallback) == fallback
 
 
+def test_parse_tool_args_buffer_keeps_fallback_fields_missing_from_stream():
+    """流式碎片缺的字段由完整 tool_call 兜底补齐，不能整块替换掉权威参数。"""
+    fallback = {"subagent_type": "general", "timeout_seconds": 120}
+
+    assert _parse_tool_args_buffer('{"subagent_type":"general","label":"统计脚本"}', fallback) == {
+        "subagent_type": "general",
+        "timeout_seconds": 120,
+        "label": "统计脚本",
+    }
+
+
 def test_is_tool_result_error_ignores_plain_text_errors():
     # 成败只认显式协议位（native status / query_result envelope），不再做任何文本匹配
     assert _is_tool_result_error("执行失败: 表不存在") is False
@@ -367,6 +407,19 @@ def test_model_failure_user_message_maps_friendly_text():
     # 401 认证失败（key 配置错误场景）
     auth_error = _make_openai_status_error(openai.AuthenticationError, 401)
     assert "认证失败" in _model_failure_user_message(auth_error)
+    # 403 权限不足：使用固定用户文案，不透出服务商原始 message（可能包含内部账号信息）
+    permission_error = _make_openai_status_error(
+        openai.PermissionDeniedError,
+        403,
+        body={
+            "error": {
+                "message": "During task with name 'model' and id 'abc' | user=60344-总行业务操作员高超",
+            }
+        },
+    )
+    permission_message = _model_failure_user_message(permission_error)
+    assert permission_message == "模型服务权限不足，请检查模型服务账号权限或当前用户的模型访问授权后重试。"
+    assert "user=" not in permission_message
     # 连接中断（流中途被上游断开场景）
     conn_error = openai.APIConnectionError(
         message="Connection error.",
@@ -402,6 +455,17 @@ def test_model_failure_user_message_maps_friendly_text():
     )
     # 其他异常一律兜底通用文案，不透出原始错误
     assert _model_failure_user_message(ValueError("raw internal detail")) == "智能问数执行失败，请稍后重试。"
+
+
+def test_model_failure_user_message_maps_graph_recursion_limit():
+    exc = GraphRecursionError("Recursion limit of 7 reached without hitting a stop condition.")
+    message = _model_failure_user_message(exc)
+    assert "7 步上限" in message
+    assert "智能问数执行失败，请稍后重试。" not in message
+
+    message_without_limit = _model_failure_user_message(GraphRecursionError("recursion limit exceeded"))
+    assert "步数上限" in message_without_limit
+    assert "智能问数执行失败" not in message_without_limit
 
 
 def test_model_failure_user_message_passthrough_provider_message():
@@ -652,7 +716,14 @@ def test_generate_chat_data_stream_uses_runtime_snapshot_for_system_prompt(monke
     )
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr("apps.chat_data_app.agent_run_support.prepare_conversation_workspace", fake_prepare_workspace)
-    monkeypatch.setattr("apps.chat_data_app.agent_run_support.build_runtime_skill_snapshot_async", fake_build_snapshot)
+
+    async def fake_ensure_runtime_skills(self):
+        return snapshot_dir
+
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent_run_support.ConversationWorkspaceRuntime.ensure_runtime_skills_async",
+        fake_ensure_runtime_skills,
+    )
 
     def create_agent(_runtime_options, **kwargs):
         captured_agent_kwargs.update(kwargs)
@@ -756,8 +827,8 @@ def test_generate_chat_data_stream_passes_valid_file_selections(monkeypatch, tmp
     workspace_root = tmp_path / "user-data"
     (workspace_root / "uploads").mkdir(parents=True)
     (workspace_root / "uploads" / "a.pdf").write_text("data", encoding="utf-8")
-    (workspace_root / "outputs" / "query_result").mkdir(parents=True)
-    (workspace_root / "outputs" / "query_result" / "r.json").write_text("{}", encoding="utf-8")
+    (workspace_root / "workspace" / ".system" / "query_result").mkdir(parents=True)
+    (workspace_root / "workspace" / ".system" / "query_result" / "r.json").write_text("{}", encoding="utf-8")
 
     async def fake_prepare_workspace(*_args, **_kwargs):
         return {"root": str(workspace_root)}
@@ -779,7 +850,7 @@ def test_generate_chat_data_stream_passes_valid_file_selections(monkeypatch, tmp
                     thread_id="conv_file_selections",
                     user_query="分析这个文件",
                     datasource_id="ds_a",
-                    file_selections=["uploads/a.pdf", "uploads/missing.pdf", "outputs/query_result/r.json"],
+                    file_selections=["uploads/a.pdf", "uploads/missing.pdf", "workspace/.system/query_result/r.json"],
                 )
             )
         )
@@ -1272,120 +1343,21 @@ def test_generate_chat_data_stream_emits_tool_message_usage_and_done(monkeypatch
     assert '"usage": {"total_tokens": 12}' in joined
     assert '"timestamp":' in joined
     assert "event: done" not in joined  # done 由 Runtime 统一发布，生成器不再输出
-    assert fake_graph.initial_state["execution_context"]["datasource_id"] == "ds_a"
-    assert fake_graph.initial_state["operator_name"] == "测试用户"
-
-
-def test_generate_chat_data_stream_projects_visible_members_from_shared_context(monkeypatch):
-    import asyncio
-
-    captured_agent_kwargs = {}
-    fake_graph = _FakeGraph(
-        events=[(_FakeMessageChunk(content="已完成"), {"langgraph_node": "model"})],
-        state=SimpleNamespace(tasks=[], values={}),
-    )
-
-    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
-
-    def create_agent(_runtime_options, **kwargs):
-        captured_agent_kwargs.update(kwargs)
-        return fake_graph
-
-    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", create_agent)
-
-    asyncio.run(
-        _collect_async_iter(
-            _generate_chat_data_stream(
-                ChatDataStreamRequest(
-                    thread_id="conv_query_members",
-                    user_query="查询所有机构订单数",
-                    datasource_id="ds_a",
-                    user_id="user_a",
-                    member_datasource_ids=["m1"],
-                    semantic_config_id="cfg_a",
-                )
-            )
-        )
-    )
-
-    assert fake_graph.initial_state["execution_context"]["available_member_datasource_ids"] == ["m1"]
-    assert fake_graph.initial_state["execution_context"]["matched_member_datasource_ids"] == ["m1"]
-
-
-def test_generate_chat_data_stream_keeps_empty_member_scope_from_shared_context(monkeypatch):
-    import asyncio
-
-    captured_agent_kwargs = {}
-    fake_graph = _FakeGraph(
-        events=[(_FakeMessageChunk(content="已完成"), {"langgraph_node": "model"})],
-        state=SimpleNamespace(tasks=[], values={}),
-    )
-
-    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
-
-    def create_agent(_runtime_options, **kwargs):
-        captured_agent_kwargs.update(kwargs)
-        return fake_graph
-
-    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", create_agent)
-
-    asyncio.run(
-        _collect_async_iter(
-            _generate_chat_data_stream(
-                ChatDataStreamRequest(
-                    thread_id="conv_query_members",
-                    user_query="查询所有机构订单数",
-                    datasource_id="ds_a",
-                    user_id="user_a",
-                    member_datasource_ids=[],
-                    semantic_config_id="cfg_a",
-                )
-            )
-        )
-    )
-
-    assert fake_graph.initial_state["execution_context"]["available_member_datasource_ids"] == []
-    assert fake_graph.initial_state["execution_context"]["matched_member_datasource_ids"] == []
-
-
-def test_generate_chat_data_stream_projects_selected_member_scope_from_shared_context(monkeypatch):
-    import asyncio
-
-    captured_agent_kwargs = {}
-    fake_graph = _FakeGraph(
-        events=[(_FakeMessageChunk(content="已完成"), {"langgraph_node": "model"})],
-        state=SimpleNamespace(tasks=[], values={}),
-    )
-
-    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
-
-    def create_agent(_runtime_options, **kwargs):
-        captured_agent_kwargs.update(kwargs)
-        return fake_graph
-
-    monkeypatch.setattr("apps.chat_data_app.agent_stream.create_data_agent", create_agent)
-
-    asyncio.run(
-        _collect_async_iter(
-            _generate_chat_data_stream(
-                ChatDataStreamRequest(
-                    thread_id="conv_query_member_selected",
-                    user_query="查询订单数",
-                    datasource_id="ds_a",
-                    user_id="user_a",
-                    member_datasource_ids=["m1"],
-                    semantic_config_id="cfg_a",
-                )
-            )
-        )
-    )
-
-    assert fake_graph.initial_state["execution_context"]["available_member_datasource_ids"] == ["m1"]
+    assert "execution_context" not in fake_graph.initial_state
+    assert "user_id" not in fake_graph.initial_state
+    assert "operator_name" not in fake_graph.initial_state
 
 
 def test_generate_chat_data_stream_emits_error_when_graph_fails(monkeypatch):
     import asyncio
 
+    persisted: dict = {}
+
+    async def fake_persist(_req, _callbacks, exc, error):
+        persisted.update(error=error, error_type=exc.__class__.__name__)
+        return _format_sse("error", {"error": error})
+
+    monkeypatch.setattr("apps.chat_data_app.agent_stream._persist_agent_failure", fake_persist)
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr(
         "apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: _FakeGraph(raise_on_stream=True)
@@ -1410,17 +1382,68 @@ def test_generate_chat_data_stream_emits_error_when_graph_fails(monkeypatch):
     assert "event: done" not in joined  # done 由 Runtime 统一发布，生成器不再输出
     # 失败异常必须抛给 Runtime（由其 finish_run("failed") 收口），不能被 Handler 吞掉。
     assert failure is not None
+    assert persisted["error"] == "智能问数执行失败，请稍后重试。"
+    assert persisted["error_type"] == "RuntimeError"
+
+
+def test_generate_chat_data_stream_reports_graph_recursion_limit(monkeypatch):
+    import asyncio
+
+    persisted: dict = {}
+
+    async def fake_persist(_req, _callbacks, exc, error):
+        persisted.update(error=error, error_type=exc.__class__.__name__)
+        return _format_sse("error", {"error": error})
+
+    class RecursionLimitGraph(_FakeGraph):
+        async def astream(self, initial_state, config=None, stream_mode=None, context=None):
+            _ = initial_state, config, stream_mode
+            raise GraphRecursionError("Recursion limit of 7 reached without hitting a stop condition.")
+            yield  # pragma: no cover - keeps this an async generator for the stream adapter
+
+    monkeypatch.setattr("apps.chat_data_app.agent_stream._persist_agent_failure", fake_persist)
+    monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
+    monkeypatch.setattr(
+        "apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: RecursionLimitGraph()
+    )
+
+    events, failure = asyncio.run(
+        _collect_async_iter_until_failure(
+            _generate_chat_data_stream(
+                ChatDataStreamRequest(
+                    user_id="u_test",
+                    thread_id="conv_recursion_limit",
+                    user_query="查订单数",
+                    datasource_id="ds_a",
+                )
+            )
+        )
+    )
+
+    joined = "".join(events)
+    assert "本轮执行已达到 7 步上限，任务被中止。" in joined
+    assert "智能问数执行失败，请稍后重试。" not in joined
+    assert failure is not None
+    assert persisted["error"] == "本轮执行已达到 7 步上限，任务被中止。请缩小任务范围、拆分任务，或新开会话后重试。"
+    assert persisted["error_type"] == "GraphRecursionError"
 
 
 def test_generate_chat_data_stream_keeps_context_limit_error_actionable(monkeypatch):
     import asyncio
 
+    persisted: dict = {}
+
+    async def fake_persist(_req, _callbacks, exc, error):
+        persisted.update(error=error, error_type=exc.__class__.__name__)
+        return _format_sse("error", {"error": error})
+
     class ContextLimitGraph(_FakeGraph):
-        async def astream(self, initial_state, config=None, stream_mode=None):
+        async def astream(self, initial_state, config=None, stream_mode=None, context=None):
             _ = initial_state, config, stream_mode
             raise ContextInputLimitExceededError("当前输入内容过长，请拆分问题后重试。")
             yield  # pragma: no cover - keeps this an async generator for the stream adapter
 
+    monkeypatch.setattr("apps.chat_data_app.agent_stream._persist_agent_failure", fake_persist)
     monkeypatch.setattr("apps.chat_data_app.agent_stream.get_checkpointer", lambda: _fake_checkpointer())
     monkeypatch.setattr(
         "apps.chat_data_app.agent_stream.create_data_agent", lambda *_args, **_kwargs: ContextLimitGraph()
@@ -1444,6 +1467,8 @@ def test_generate_chat_data_stream_keeps_context_limit_error_actionable(monkeypa
     assert "智能问数执行失败，请稍后重试。" not in joined
     assert "event: done" not in joined  # done 由 Runtime 统一发布，生成器不再输出
     assert failure is not None  # 失败异常抛给 Runtime 收口
+    assert persisted["error"] == "当前输入内容过长，请拆分问题后重试。"
+    assert persisted["error_type"] == "ContextInputLimitExceededError"
 
 
 def test_generate_chat_data_stream_semantic_config_missing(monkeypatch):
@@ -1596,10 +1621,11 @@ def test_sql_completion_handler_wraps_stream(monkeypatch):
     assert response.headers["X-Accel-Buffering"] == "no"
     assert captured["conversation"] == ("chat_data", "conv_sql", "u1")
     chunks = asyncio.run(_collect_async_iter(response.body_iterator))
-    assert chunks == ["id: test-1-0\nevent: done\ndata: [DONE]\n\n"]
+    assert any("id: test-1-0" in chunk and "data: [DONE]" in chunk for chunk in chunks)
+    assert any("event: heartbeat" in chunk for chunk in chunks)
     runtime_context = captured["start_run_args"][3]
     assert captured["start_run_args"][:3] == ("conv_sql", "u1", "测试用户")
-    assert runtime_context["member_datasource_ids"] == ["m1"]
+    assert "member_datasource_ids" not in runtime_context
     assert runtime_context["semantic_config_id"] == "cfg"
     assert runtime_context["model_id"] == "m1"
     # 请求到达墙钟随 Run 行透传（harness 首 token / 任务总耗时起点）
@@ -1788,3 +1814,30 @@ def _async_return(value):
         return value
 
     return _reader
+
+
+def test_stream_adapter_passes_run_context_to_astream():
+    """主图每次 astream 都带 run context：resume 也走同一处，不会漏传身份。"""
+    captured = {}
+
+    class FakeAgent:
+        async def astream(self, _state, config=None, stream_mode=None, context=None):
+            captured["context"] = context
+            if False:  # pragma: no cover - 保持异步生成器形态
+                yield None
+
+    adapter = agent_stream_module._AgentSseStreamAdapter(
+        agent=FakeAgent(),
+        initial_state={"messages": []},
+        config={"configurable": {"thread_id": "conv_ctx"}},
+        run_context={"user_id": "u1", "operator_name": "测试用户"},
+    )
+
+    asyncio.run(_drain(adapter._iter_agent_stream_events(0.0)))
+
+    assert captured["context"] == {"user_id": "u1", "operator_name": "测试用户"}
+
+
+async def _drain(iterator):
+    async for _ in iterator:
+        pass

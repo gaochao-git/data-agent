@@ -62,7 +62,13 @@ def create_steering_middleware(
         await admit_messages(claimed.messages)
         message_ids = [str(message.id or "") for message in claimed.messages]
         tracker.record(message_ids)
-        get_stream_writer()({"type": "inbox_admitted", "message_ids": message_ids})
+        visible_ids = [
+            message_id
+            for message_id, message in zip(message_ids, claimed.messages, strict=False)
+            if not (getattr(message, "additional_kwargs", None) or {}).get("hide_from_ui")
+        ]
+        if visible_ids:
+            get_stream_writer()({"type": "inbox_admitted", "message_ids": visible_ids})
         return {"messages": claimed.messages}
 
     return inject_steering_messages

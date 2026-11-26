@@ -80,9 +80,7 @@ def validate_object_type_payload(payload: dict[str, Any]) -> dict[str, Any]:
         raise _invalid(f"对象类型写性仅支持 {'/'.join(OBJECT_WRITE_MODES)}，当前为 {write_mode}")
     conflict_resolution = _normalized_text(payload.get("conflict_resolution")) or DEFAULT_CONFLICT_RESOLUTION
     if conflict_resolution not in CONFLICT_RESOLUTIONS:
-        raise _invalid(
-            f"冲突解决策略仅支持 {'/'.join(CONFLICT_RESOLUTIONS)}，当前为 {conflict_resolution}"
-        )
+        raise _invalid(f"冲突解决策略仅支持 {'/'.join(CONFLICT_RESOLUTIONS)}，当前为 {conflict_resolution}")
     conflict_timestamp_property = _normalized_text(payload.get("conflict_timestamp_property"))
     if conflict_timestamp_property and not API_NAME_PATTERN.match(conflict_timestamp_property):
         raise _invalid("冲突时间戳属性名仅允许字母、数字、下划线，长度 1-128")

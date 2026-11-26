@@ -1,4 +1,4 @@
-"""subagents 残余分支补测：流式过滤 flush、摘要注入兜底、编译围栏与消息记账。"""
+"""subagents 残余分支补测：流式过滤 flush、编译围栏与消息记账。"""
 
 from types import SimpleNamespace
 
@@ -7,14 +7,15 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
 from apps.chat_data_app.agent.context import context_budget as cb
+from apps.chat_data_app.agent.middleware import subagent_assembly as sa
 from apps.chat_data_app.agent.middleware import subagents as sm
 from apps.chat_data_app.agent.middleware.subagents import (
     SubagentSpec,
     _StreamingToolCallMarkupFilter,
     _subagent_report_token_limit,
     _SubagentStreamState,
-    build_task_tool,
 )
+from apps.chat_data_app.tests.unit.subagent_test_support import build_subagent_tool, invoke_subagent_tool
 
 
 def _spec(name="explore", **overrides):
@@ -36,31 +37,7 @@ def test_stream_filter_flush_drops_exact_opener_pending():
     assert markup_filter.flush() == ""
 
 
-def test_budget_alert_keeps_messages_when_summary_builder_returns_none(monkeypatch):
-    monkeypatch.setattr(
-        sm,
-        "get_model_context_budget",
-        lambda model_id: SimpleNamespace(compression_trigger_tokens=10**9),
-    )
-    monkeypatch.setattr(cb, "build_runtime_context_summary_message", lambda _summary: None)
-    middleware = sm.create_subagent_budget_alert_middleware(_spec(), [])
-    seen = {}
-
-    def handler(request):
-        seen["request"] = request
-        return "done"
-
-    request = SimpleNamespace(
-        messages=[AIMessage(content="短任务")],
-        state={"context_summary": "上一轮摘要"},
-        override=lambda **kwargs: SimpleNamespace(**kwargs),
-    )
-
-    assert middleware.wrap_model_call(request, handler) == "done"
-    assert seen["request"] is request
-
-
-def test_compile_subagent_appends_fence_when_run_controls_complete(monkeypatch):
+def test_compile_subagent_keeps_fence_outermost_when_run_controls_complete(monkeypatch):
     captured = {}
     monkeypatch.setattr(sm, "_subagent_system_prompt", lambda spec: "系统提示词")
     monkeypatch.setattr(
@@ -68,11 +45,10 @@ def test_compile_subagent_appends_fence_when_run_controls_complete(monkeypatch):
         "create_context_compression_middleware",
         lambda **kwargs: captured.setdefault("compression", kwargs) or "compression",
     )
-    monkeypatch.setattr(sm, "create_subagent_budget_alert_middleware", lambda *a, **k: "budget")
-    monkeypatch.setattr(sm, "SkillPrerequisiteMiddleware", lambda *_a: "skill")
-    monkeypatch.setattr(sm, "create_tool_call_name_normalizer_middleware", lambda _tools: "normalizer")
-    monkeypatch.setattr(sm, "create_tool_result_middleware", lambda: "result")
-    monkeypatch.setattr(sm, "ToolErrorMiddleware", lambda *_a: "error")
+    monkeypatch.setattr(sa, "SkillPrerequisiteMiddleware", lambda *_a: "skill")
+    monkeypatch.setattr(sa, "create_tool_call_name_normalizer_middleware", lambda _tools: "normalizer")
+    monkeypatch.setattr(sa, "create_tool_result_middleware", lambda: "result")
+    monkeypatch.setattr(sa, "ToolErrorMiddleware", lambda *_a: "error")
     monkeypatch.setattr(
         sm, "create_tool_execution_fence_middleware", lambda **kwargs: captured.setdefault("fence", kwargs)
     )
@@ -90,7 +66,8 @@ def test_compile_subagent_appends_fence_when_run_controls_complete(monkeypatch):
     assert spec._context_request_budget is not None
     assert captured["compression"]["context_runtime"].request_budget is spec._context_request_budget
     assert captured["fence"] == {"run_id": "run-1", "owner_token": "token", "inbox_service": "inbox"}
-    assert captured["fence"] in captured["agent"]["middleware"]
+    # 围栏必须最外层：否则 ToolErrorMiddleware 会把租约丢失转成普通工具失败。
+    assert captured["agent"]["middleware"][0] is captured["fence"]
 
 
 def test_collect_update_skips_duplicate_message_in_same_removal_update():
@@ -138,14 +115,17 @@ def test_subagent_report_token_limit_returns_none_for_zero_hard_limit():
 @pytest.mark.asyncio
 async def test_task_tool_without_usage_meta_omits_context_usage_snapshot(monkeypatch):
     class FakeRunnable:
-        async def astream(self, _state, _config, *, stream_mode):
+        async def astream(self, _state, _config, *, stream_mode, context=None):
             yield "updates", {"model": {"messages": [AIMessage(content="分析完成")]}}
 
     monkeypatch.setattr(sm, "_compile_subagent", lambda spec, run_controls=None: FakeRunnable())
     monkeypatch.setattr(sm, "_safe_subagent_budget_meta", lambda *a, **k: None)
-    tool = build_task_tool([_spec()])
+    tool = build_subagent_tool([_spec()])
 
-    result = await tool.coroutine(
+    result = await invoke_subagent_tool(
+        tool,
+        "dispatch",
+        background=False,
         description="分析",
         subagent_type="explore",
         runtime=SimpleNamespace(state={"user_id": "u1"}, tool_call_id="call-1"),

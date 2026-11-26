@@ -10,6 +10,7 @@ from typing import Any, Literal
 
 from utils.logger import get_logger
 
+from ..tool_execution_timing import mark_tool_execution_started
 from .officecli_adapter import OFFICECLI_NO_AUTO_RESIDENT_ENV
 from .workspace_sandbox_paths import (
     _SANDBOX_WRITABLE_FILE_MODE,
@@ -29,6 +30,21 @@ _SANDBOX_COMMAND_GID = 65534
 MAX_OUTPUT_CHARS = 12000
 
 
+class InstrumentedOperationLock:
+    """Serialize sandbox operations and mark actual execution start for timing."""
+
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+
+    async def __aenter__(self) -> InstrumentedOperationLock:
+        await self._lock.acquire()
+        mark_tool_execution_started()
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc: Any, traceback: Any) -> None:
+        self._lock.release()
+
+
 @dataclass
 class SandboxExecutionSession:
     sandbox: Any
@@ -41,7 +57,7 @@ class SandboxExecutionSession:
     uploads_manifest: dict[str, tuple[int, int, str]] | None = None
     text_line_counts: dict[str, tuple[int, str, int]] = field(default_factory=dict)
     pending_persistence: bool = False
-    operation_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
+    operation_lock: InstrumentedOperationLock = field(default_factory=InstrumentedOperationLock, repr=False)
 
 
 class SandboxExecutionSessionRef:

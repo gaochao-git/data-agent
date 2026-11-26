@@ -504,9 +504,7 @@ async def execute_ontology_action_type(
 
 @router.post("/admin/meta/ontology/action-types/{action_type_name}/executions/{execution_id}/revert")
 @_ontology_route("Action 撤销失败，请检查执行状态与操作人", ErrorCode.CHATDATA_ONTOLOGY_OPERATION_FAILED)
-async def revert_ontology_action_execution(
-    action_type_name: str, execution_id: int, request: Request
-) -> JSONResponse:
+async def revert_ontology_action_execution(action_type_name: str, execution_id: int, request: Request) -> JSONResponse:
     current_user = _get_current_user(request)
     data = await _action_type_service.revert_execution_async(
         action_type_name,

@@ -103,3 +103,4 @@ server/logs/
 mcp_servers/.env
 # DeepSeek local working files
 /.deepseek/
+/chat_data-cache/

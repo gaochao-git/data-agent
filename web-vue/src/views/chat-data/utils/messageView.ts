@@ -8,13 +8,15 @@
  * 纯函数、无 DOM 依赖，便于单测；新增消息/分段类型时改这里，而不是改模板分支。
  */
 import type {
+  DocumentAnnotation,
+  LangGraphMessage,
   Message,
   MessageAttachment,
   SubagentTrailItem,
   ThinkingSegment,
   ToolCallInfo,
 } from '../types'
-import { getToolCompactDescription, getToolDisplayName, getToolTechnicalDescription } from './toolDisplay'
+import { getSubagentDispatchArgs, getToolCompactDescription, getToolDisplayName, getToolTechnicalDescription, isSubagentDisplayToolName } from './toolDisplay'
 import { normalizeToolCallForDisplay, shouldInlineRenderQueryResult } from './semanticTool'
 
 /** 思考收起态尾部预览长度（主对话与子智能体共用口径）。 */
@@ -25,6 +27,28 @@ export const USER_MESSAGE_SCROLL_LINE_THRESHOLD = 10
 export const USER_MESSAGE_SCROLL_MAX_HEIGHT = '240px'
 
 export type TextNormalizer = (content: string) => string
+
+/**
+ * 完整 AIMessage 的 tool_calls 只更新身份与参数，保留流式阶段已归并的展示字段。
+ *
+ * 模型收口时会再发一条带完整 tool_calls 的 message 帧；若在这里重新构造
+ * ToolCallInfo，会把 tool_progress 已写入的 contentLines/removedLines、
+ * streamingIntent 等展示字段冲掉（本轮 file_write 的 +100 就是这样丢的）。
+ */
+export const mergeToolCallFromMessage = (
+  existing: ToolCallInfo | undefined,
+  call: NonNullable<LangGraphMessage['tool_calls']>[number],
+): ToolCallInfo => ({
+  ...(existing || {}),
+  tool_call_id: call.id,
+  tool_name: call.name,
+  display_name: call.display_name || existing?.display_name,
+  args: { ...(existing?.args || {}), ...(call.args || {}) },
+  result: existing?.result,
+  status: existing?.status || 'generating',
+  started_at_ms: existing?.started_at_ms ?? null,
+  ended_at_ms: existing?.ended_at_ms ?? null,
+})
 
 const defaultNormalizeText: TextNormalizer = content => String(content || '').trim()
 
@@ -241,6 +265,51 @@ export const shouldShowAssistantFooter = (
 export const stripAttachmentPlaceholders = (content: string): string =>
   String(content || '').replace(/^\[attachment\].*$/gm, '').replace(/\n{3,}/g, '\n\n').trimEnd()
 
+const MENTION_SUFFIX_RES = [
+  /\s*\[引用文件：[^\]]*\]\s*$/gm,
+  /\s*\[本轮指定语义模型：[^\]]*\]\s*$/gm,
+]
+const QUOTE_BLOCK_RES = [
+  /\s*\[引用助手回复片段开始\][\s\S]*?\[引用助手回复片段结束\]/g,
+  /^\s*\[引用助手回复片段(?:开始|结束)\]\s*$/gm,
+]
+const DOCUMENT_ANNOTATION_BLOCK_RE =
+  /\[(?:文档选中内容|文档修改请求)开始\]\s*([\s\S]*?)\s*\[(?:文档选中内容|文档修改请求)结束\]/g
+const DOCUMENT_ANNOTATION_BLOCK_RES = [
+  /\s*\[(?:文档选中内容|文档修改请求)开始\][\s\S]*?\[(?:文档选中内容|文档修改请求)结束\]/g,
+  /^\s*\[(?:文档选中内容|文档修改请求)(?:开始|结束)\]\s*$/gm,
+  // 旧版后端把执行提示拼在标记块之后；这里同时兜底存量消息与本地/实时消息。
+  /^\s*请按「定位」修改文档.*$/gm,
+  /^\s*请使用 officecli 技能按「定位」修改文档.*$/gm,
+  /^\s*处理建议：若用户要求修改.*$/gm,
+]
+const DOCUMENT_ANNOTATION_FIELD_LABELS = new Set([
+  '文件',
+  '定位',
+  '选中原文',
+  '原文',
+  '问题或要求',
+  '修改要求',
+  '处理建议',
+])
+
+const collapseBlankLines = (content: string): string => content.replace(/\n{3,}/g, '\n\n').trim()
+
+/**
+ * 用户消息正文里的服务端注入内容只供模型理解，不进入气泡：
+ * 划选引用、文档选中内容、@ 文件短句均以 chip 呈现；旧版执行提示一并清理。
+ * 展示层与历史加载共用这一口径，避免某条链路漏剥。
+ */
+export const stripUserMessageInternalSuffixes = (content: string): string => {
+  let text = String(content || '')
+  for (const regex of DOCUMENT_ANNOTATION_BLOCK_RES) text = text.replace(regex, '\n')
+  text = collapseBlankLines(text)
+  for (const regex of QUOTE_BLOCK_RES) text = text.replace(regex, '\n')
+  text = collapseBlankLines(text)
+  for (const regex of MENTION_SUFFIX_RES) text = text.replace(regex, '')
+  return text.trimEnd()
+}
+
 /** 从用户消息内容解析 [attachment] /path 占位，历史会话无结构化 attachments 时兜底。 */
 export const parseAttachmentPlaceholders = (content: string): MessageAttachment[] => {
   if (!content) return []
@@ -261,6 +330,45 @@ export const getEffectiveAttachments = (message: Message): MessageAttachment[] =
     : parseAttachmentPlaceholders(message.content)
 )
 
+/** 历史只有模型可见标记块：反解出文件、定位与问题/要求，恢复成 chip。 */
+export const parseDocumentAnnotationBlocks = (content: string): DocumentAnnotation[] => {
+  const annotations: DocumentAnnotation[] = []
+  for (const match of String(content || '').matchAll(DOCUMENT_ANNOTATION_BLOCK_RE)) {
+    const fields = new Map<string, string>()
+    // 旧消息里的原文可能跨行；已知字段才开新字段，其余行续写上一字段，
+    // 避免第二行及之后的原文或问题被丢弃。
+    let currentField = ''
+    for (const line of (match[1] || '').split('\n')) {
+      const separator = line.indexOf('：')
+      const label = separator > 0 ? line.slice(0, separator).trim() : ''
+      if (label && DOCUMENT_ANNOTATION_FIELD_LABELS.has(label)) {
+        currentField = label
+        fields.set(label, line.slice(separator + 1).trim())
+        continue
+      }
+      if (currentField && line.trim()) {
+        const previous = fields.get(currentField)
+        fields.set(currentField, previous ? `${previous}\n${line}` : line)
+      }
+    }
+    const rawFile = fields.get('文件') || ''
+    const location = fields.get('定位') || ''
+    const comment = fields.get('问题或要求') || fields.get('修改要求') || ''
+    const filePath = rawFile.replace(/^\/mnt\/user-data\//, '').replace(/^\/+/, '')
+    // 兼容旧消息里的「（第 N 页）」后缀：页码不作为定位依据，直接剥掉。
+    const docPath = location.replace(/（第\s*\d+\s*页）\s*$/, '').trim()
+    if (!filePath || filePath.includes('..') || !docPath) continue
+    annotations.push({
+      id: `doc-annotation-legacy-${annotations.length}`,
+      filePath,
+      docPath,
+      quote: fields.get('选中原文') || fields.get('原文') || '',
+      comment,
+    })
+  }
+  return annotations.slice(0, 5)
+}
+
 /** 用户消息上展示的 @ 引用工作区文件（本地发送与历史回放统一走 fileSelections）。 */
 export const getUserMentionedFiles = (message: Message): Array<{ path: string; name: string }> => {
   if (message.role !== 'user') return []
@@ -276,6 +384,29 @@ export const getUserQuotedSnippets = (message: Message): Array<{ id: string; tex
   return (message.quotedSnippets || [])
     .map(item => ({ id: String(item?.id || ''), text: String(item?.text || '').trim() }))
     .filter(item => item.text)
+}
+
+/** 用户消息上展示的文档标注（本地发送与历史回放统一走 documentAnnotations）。 */
+export const getUserDocumentAnnotations = (message: Message): Array<{
+  id: string
+  filePath: string
+  docPath: string
+  quote?: string
+  comment: string
+}> => {
+  if (message.role !== 'user') return []
+  const source = message.documentAnnotations?.length
+    ? message.documentAnnotations
+    : parseDocumentAnnotationBlocks(message.content)
+  return source
+    .map(item => ({
+      id: String(item?.id || ''),
+      filePath: String(item?.filePath || ''),
+      docPath: String(item?.docPath || ''),
+      quote: String(item?.quote || ''),
+      comment: String(item?.comment || '').trim(),
+    }))
+    .filter(item => item.filePath && item.docPath)
 }
 
 /** 用户长消息：超过阈值行数时展开区限高滚动。 */
@@ -302,7 +433,7 @@ export const formatCompressionTokens = (value?: number): string => (
 export interface SubagentTrailThinking {
   content: string
   truncated: boolean
-  /** 父 task 仍在跑且这是最后一条条目：思考可能还在增量。 */
+  /** 父 subagent 仍在跑且这是最后一条条目：思考可能还在增量。 */
   active: boolean
   preview: string
 }
@@ -334,6 +465,8 @@ export interface SubagentTrailCompactionBlock {
   compaction: {
     id: string
     timestamp?: string
+    /** 压缩中占位（只来自实时流），渲染成带 spinner 的 CompactionMessage */
+    compressing?: boolean
     estimated_tokens_before?: number
     estimated_tokens_after?: number
     estimated_cleared_tokens?: number
@@ -354,6 +487,12 @@ const buildTrailToolCall = (item: SubagentTrailItem): ToolCallInfo => ({
   args: item.args || {},
   result: item.result,
   status: item.status || 'running',
+  argsText: item.argsText,
+  argsStreaming: item.argsStreaming,
+  argsTruncated: item.argsTruncated,
+  contentLines: item.contentLines,
+  removedLines: item.removedLines,
+  streamingIntent: item.streamingIntent,
   started_at_ms: item.started_at_ms ?? null,
   ended_at_ms: item.ended_at_ms ?? null,
 })
@@ -370,6 +509,7 @@ export const buildSubagentTrailBlocks = (toolCall: ToolCallInfo): SubagentTrailB
         compaction: {
           id: item.id,
           timestamp: item.timestamp,
+          compressing: item.compressing === true,
           estimated_tokens_before: item.estimated_tokens_before,
           estimated_tokens_after: item.estimated_tokens_after,
           estimated_cleared_tokens: item.estimated_cleared_tokens,
@@ -386,7 +526,7 @@ export const buildSubagentTrailBlocks = (toolCall: ToolCallInfo): SubagentTrailB
         displayName: getToolDisplayName(toolCallItem.tool_name, toolCallItem.args),
         compactDescription: getToolCompactDescription(toolCallItem.tool_name, toolCallItem.args || {}),
         technicalDescription: getToolTechnicalDescription(toolCallItem.tool_name || '', toolCallItem.args),
-        isRunning: item.status === 'running',
+        isRunning: item.status === 'running' || item.status === 'generating',
         isError: item.status === 'error',
         queryResultToolCall: shouldInlineRenderQueryResult(toolCallItem) ? toolCallItem : null,
       }
@@ -413,7 +553,7 @@ export const buildSubagentTrailBlocks = (toolCall: ToolCallInfo): SubagentTrailB
 /**
  * 子智能体 trail → 主对话消息模型（聊天式过程视图复用消息组件）。
  *
- * - 任务书（task.description）→ 一条 user 消息；
+ * - 任务书（subagent.description）→ 一条 user 消息；
  * - 整段子智能体过程 → **一条** assistant 消息：思考/中间叙述/内层工具都进
  *   segments（与主对话「一条助手消息里过程 + 最终回答」结构一致），最后一段
  *   文本即最终报告，由消息组件按工作过程折叠口径渲染。
@@ -421,23 +561,36 @@ export const buildSubagentTrailBlocks = (toolCall: ToolCallInfo): SubagentTrailB
  * 合并成单条消息而不是每条 trail 记录一个气泡：子智能体一轮任务会有多个内层
  * 模型轮次，拆成多个气泡会出现一屏「工作过程」重复标题，反而不像主对话。
  */
+const parseMessageTimestamp = (value?: number | string | null): Date | undefined => {
+  if (value === null || value === undefined || value === '') return undefined
+  const parsed = typeof value === 'number' ? value : Date.parse(String(value))
+  if (!Number.isFinite(parsed)) return undefined
+  return new Date(parsed)
+}
+
 export const buildSubagentMessages = (toolCall: ToolCallInfo): Message[] => {
   const blocks = buildSubagentTrailBlocks(toolCall)
   const parentRunning = isSubagentParentRunning(toolCall)
   const messages: Message[] = []
-  const prompt = String(toolCall.args?.description || '').trim()
+  // 与主对话一致：用户气泡展示派发时间，助手气泡完成后展示收口时间；
+  // 运行中不出 footer（时间尚未确定，且与主对话的流式口径一致）。
+  const startedAt = parseMessageTimestamp(toolCall.started_at_ms)
+  const endedAt = parentRunning ? undefined : parseMessageTimestamp(toolCall.ended_at_ms)
+  const prompt = String(getSubagentDispatchArgs(toolCall.tool_name, toolCall.args || {})?.description || '').trim()
   if (prompt) {
-    messages.push({ id: `${toolCall.tool_call_id}-task`, role: 'user', content: prompt })
+    messages.push({ id: `${toolCall.tool_call_id}-task`, role: 'user', content: prompt, timestamp: startedAt })
   }
 
   const assistant: Message = {
     id: `${toolCall.tool_call_id}-process`,
     role: 'assistant',
     content: '',
+    timestamp: endedAt,
     segments: [],
     thinkingSegments: [],
     toolCalls: [],
     isStreaming: parentRunning,
+    error: String(toolCall.subagentError || '').trim() || undefined,
   }
 
   for (const block of blocks) {
@@ -450,6 +603,9 @@ export const buildSubagentMessages = (toolCall: ToolCallInfo): Message[] => {
           thinkingSegments: [...(assistant.thinkingSegments || [])],
           isStreaming: false,
           forceWorkProcess: true,
+          // 终态错误只属于本轮最后一条助手消息，压缩切出的历史段不重复展示。
+          error: undefined,
+          timestamp: parseMessageTimestamp(block.compaction.timestamp) ?? endedAt,
         })
       }
       messages.push({
@@ -458,7 +614,7 @@ export const buildSubagentMessages = (toolCall: ToolCallInfo): Message[] => {
         content: '',
         contextCompression: {
           id: block.compaction.id,
-          compressing: false,
+          compressing: block.compaction.compressing === true,
           estimated_tokens_before: block.compaction.estimated_tokens_before,
           estimated_tokens_after: block.compaction.estimated_tokens_after,
           estimated_cleared_tokens: block.compaction.estimated_cleared_tokens,
@@ -489,12 +645,23 @@ export const buildSubagentMessages = (toolCall: ToolCallInfo): Message[] => {
     }
   }
 
+  // 没有过程 trail 的终态任务（如完成后 trail 尚未落库/被清理）也要有结论：
+  // 把 subagent 结果当作最后一段助手正文，渲染成和主对话一样的气泡，而不是另起一张
+  // 自定义「最终报告」卡。
+  const report = String(toolCall.result || '').trim()
+  const hasTextSegment = (assistant.segments || []).some(
+    segment => segment.type === 'text' && segment.content.trim(),
+  )
+  if (!hasTextSegment && report && !parentRunning) {
+    assistant.segments = [...(assistant.segments || []), { type: 'text', content: report }]
+  }
+
   // 运行中即使还没有正文/工具段也要保留助手占位：状态行（工作中动画/已运行时长）要可见
-  if (assistant.segments?.length || parentRunning) messages.push(assistant)
+  if (assistant.segments?.length || parentRunning || assistant.error) messages.push(assistant)
   return messages
 }
 
 /** 子智能体过程区是否有可渲染内容。 */
 export const hasSubagentTrail = (toolCall: ToolCallInfo): boolean => (
-  toolCall.tool_name === 'task' && Boolean(toolCall.subagentTrail?.length)
+  isSubagentDisplayToolName(toolCall.tool_name) && Boolean(toolCall.subagentTrail?.length)
 )

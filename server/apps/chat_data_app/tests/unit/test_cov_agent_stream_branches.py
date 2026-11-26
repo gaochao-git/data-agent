@@ -36,13 +36,13 @@ def _adapter(*, agent=None, **attrs):
 
 
 class _EmptyAgent:
-    async def astream(self, _state, config=None, stream_mode=None):
+    async def astream(self, _state, config=None, stream_mode=None, context=None):
         for _ in ():
             yield _
 
 
 class _ExplodingAgent:
-    async def astream(self, _state, config=None, stream_mode=None):
+    async def astream(self, _state, config=None, stream_mode=None, context=None):
         raise RuntimeError("boom")
         yield  # pragma: no cover - 保持异步生成器形态
 
@@ -192,6 +192,47 @@ def test_subagent_delta_payload_without_delta_is_dropped():
     assert result == []
 
 
+def test_subagent_tool_args_delta_payload_is_forwarded():
+    """子图参数增量既要过入站白名单，也必须原样转发给前端。"""
+    adapter = _adapter()
+
+    result = adapter._handle_subagent_tool_payload(
+        {
+            "event": {
+                "event_type": agent_stream.SSE_EVENT_TOOL_ARGS_DELTA,
+                "tool_call_id": "tool-1",
+                "tool_name": "file_read",
+                "status": "generating",
+                "delta": '{"file_path":',
+                "parent_tool_call_id": "parent-1",
+            }
+        }
+    )
+
+    assert len(result) == 1
+    assert "event: tool_args_delta" in result[0]
+    assert '"parent_tool_call_id": "parent-1"' in result[0]
+
+
+def test_subagent_generation_speed_payload_is_forwarded():
+    """子图实时生成速率必须过入站白名单并转发给前端。"""
+    adapter = _adapter()
+
+    result = adapter._handle_subagent_tool_payload(
+        {
+            "event": {
+                "event_type": agent_stream.SSE_EVENT_SUBAGENT_GENERATION_SPEED,
+                "parent_tool_call_id": "parent-1",
+                "tokens_per_second": 36.6,
+            }
+        }
+    )
+
+    assert len(result) == 1
+    assert "event: subagent_generation_speed" in result[0]
+    assert '"tokens_per_second": 36.6' in result[0]
+
+
 def test_record_first_visible_payload_falls_back_to_perf_clock(monkeypatch):
     monkeypatch.setattr(agent_stream, "emit_llm_first_token_timeout_alarm", lambda *a, **k: None)
     adapter = _adapter()
@@ -281,6 +322,23 @@ async def test_admit_inbox_messages_replaces_and_persists_each_message(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_persist_admitted_inbox_messages_does_not_put_user_id_in_operator_name(monkeypatch):
+    captured: dict = {}
+
+    async def fake_persist(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(agent_stream.conversation_event_service, "persist_user_message", fake_persist)
+    callbacks = SimpleNamespace(thread_id="conv-1", user_id="u1", username=None)
+    message = HumanMessage(content="排队消息", id="m1")
+
+    await agent_stream._persist_admitted_inbox_messages(callbacks, [message])
+
+    assert captured["user_id"] == "u1"
+    assert captured["operator_name"] == ""
+
+
+@pytest.mark.asyncio
 async def test_mark_waiting_for_user_skips_without_run_id(monkeypatch):
     calls = []
 
@@ -327,6 +385,54 @@ async def test_mark_waiting_for_user_sets_turn_and_calls_service(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_mark_waiting_for_user_does_not_put_user_id_in_operator_name(monkeypatch):
+    calls = []
+
+    async def fake_mark(*args):
+        calls.append(args)
+
+    monkeypatch.setattr(agent_stream.agent_inbox_service, "mark_waiting_for_user", fake_mark)
+    callbacks = SimpleNamespace(
+        run_id="run-1",
+        effective_turn_id="turn-2",
+        user_id="u1",
+        username=None,
+        owner_token="token",
+    )
+    question = {"question": "继续吗"}
+
+    await _mark_agent_waiting_for_user(callbacks, question)
+
+    assert calls == [("run-1", question, "u1", "", "token")]
+
+
+@pytest.mark.asyncio
+async def test_restore_question_answer_does_not_put_user_id_in_operator_name(monkeypatch):
+    calls = []
+
+    class _DisconnectedRequest:
+        async def is_disconnected(self):
+            return True
+
+    async def fake_restore(*args):
+        calls.append(args)
+
+    monkeypatch.setattr(agent_stream.agent_inbox_service, "restore_question_answer", fake_restore)
+    callbacks = SimpleNamespace(
+        request=_DisconnectedRequest(),
+        resume_answer={"answers": []},
+        run_id="run-1",
+        user_id="u1",
+        username=None,
+        owner_token="token",
+        thread_id="conv-1",
+    )
+
+    assert await agent_stream._before_agent_stream(callbacks) is False
+    assert calls == [("run-1", "u1", "", "token")]
+
+
+@pytest.mark.asyncio
 async def test_resolve_agent_turn_inputs_without_receipt_timestamp(monkeypatch):
     monkeypatch.setattr(agent_stream, "build_unified_system_prompt", lambda *a, **k: "系统提示词")
     user_input = TurnUserInput(
@@ -343,7 +449,7 @@ async def test_resolve_agent_turn_inputs_without_receipt_timestamp(monkeypatch):
         username="张三",
         thread_id="c1",
         datasource_id=None,
-        semantic_context=SimpleNamespace(available_member_datasource_ids=[], matched_member_datasource_ids=[]),
+        semantic_context=SimpleNamespace(),
         runtime_options=SimpleNamespace(workspace_backend="local"),
         workspace_root="/tmp/ws",
         data_context={},
@@ -383,7 +489,7 @@ async def test_resolve_agent_turn_inputs_uses_receipt_timestamp(monkeypatch):
         username="张三",
         thread_id="c1",
         datasource_id=None,
-        semantic_context=SimpleNamespace(available_member_datasource_ids=[], matched_member_datasource_ids=[]),
+        semantic_context=SimpleNamespace(),
         runtime_options=SimpleNamespace(workspace_backend="local"),
         workspace_root="/tmp/ws",
         data_context={},

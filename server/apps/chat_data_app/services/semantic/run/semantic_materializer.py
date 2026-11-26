@@ -8,12 +8,16 @@ import json
 import re
 import time
 from collections import OrderedDict
+from contextlib import asynccontextmanager
 from pathlib import PurePosixPath
 from typing import Any
 
 import yaml
 
 from utils.logger import get_logger
+from utils.redis_lock import file_lock, redis_lease, semantic_lease_key
+from utils.storage_paths import semantic_cache_dir
+from utils.workspace_system_paths import SEMANTIC_VIRTUAL_ROOT
 
 from ...ontology.ontology_injection import materialize_ontology_catalog_async
 from ...ontology.query_mode import (
@@ -33,7 +37,7 @@ _CACHE_LIMIT = 256
 _CACHE_HARD_LIMIT = 4096
 _YAML_CACHE: OrderedDict[str, str] = OrderedDict()
 # 语义模型 YAML 快照目录（受管只读区，仅供 file_grep/file_read）
-SEMANTIC_SNAPSHOT_DIR = "/mnt/user-data/workspace/semantic"
+SEMANTIC_SNAPSHOT_DIR = SEMANTIC_VIRTUAL_ROOT
 # 语义资产目录文件（agent 检索第一步整读；下划线前缀置顶排序并与模型快照 `{模型名}__{id后缀}.yaml` 区分）
 SEMANTIC_CATALOG_FILE_NAME = "_semantic_catalog.yaml"
 # unicode 感知：保留中文，仅把空白/路径分隔等不安全字符折叠成下划线
@@ -214,7 +218,7 @@ async def prematerialize_enabled_semantic_models(
     user_id: str | None,
     source_type: str = "",
 ) -> dict[str, Any]:
-    """Run 启动前按业务域模式物化「语义模型目录」或「本体目录」（二选一）。
+    """Run 启动前物化 workspace/.system/semantic/ 下的语义模型目录或本体目录。
 
     模式由 ``services/ontology/query_mode.py`` 单点判定（业务域 = 数据源组）：
 
@@ -515,14 +519,41 @@ async def _render_selected_configs(
     return entries, directory, cache_hits, failed_ids
 
 
-async def _prune_empty_scope_semantic_files(workspace_runtime: Any, prune_stale: bool) -> None:
-    """空启用集时清空语义目录残留。
+def _activate_semantic_cache(workspace_runtime: Any, datasource_id: str | None) -> None:
+    """固定本轮数据源组的语义缓存 ref；单模型物化不调用（不切 ref）。"""
+    activate = getattr(workspace_runtime, "activate_semantic_cache", None)
+    if activate is not None:
+        activate(datasource_id=str(datasource_id or ""))
 
-    ``prune_stale`` 只在调用方传入“全量范围”语义时开启；空范围即保留集为空，
-    语义目录是系统受管目录，只剩 *.yaml 需要清理（含本体/语义资产目录）。
-    """
-    if prune_stale and workspace_runtime is not None:
-        await _prune_stale_semantic_files(workspace_runtime, set())
+
+@asynccontextmanager
+async def _semantic_write_guard(user_id: str, datasource_id: str) -> Any:
+    """Redis 跨节点租约；降级时用同机文件锁兜底，避免多进程交叠写。"""
+    async with redis_lease(semantic_lease_key(user_id, datasource_id)) as leased:
+        if leased:
+            yield
+            return
+        target = semantic_cache_dir(user_id, datasource_id)
+        async with file_lock(target.parent / f".{target.name}.lock"):
+            yield
+
+
+async def _write_semantic_entries_locked(
+    workspace_runtime: Any,
+    *,
+    datasource_id: str | None,
+    entries: list[tuple[str, str]],
+    prune_stale: bool,
+    keep_paths: set[str] | None = None,
+) -> None:
+    """共享 semantic 写入：Redis 租约优先，未配置时由本地后端原子写兜底。"""
+    user_id = str(getattr(workspace_runtime, "user_id", "") or "system")
+    async with _semantic_write_guard(user_id, str(datasource_id or "unknown")):
+        if prune_stale:
+            _activate_semantic_cache(workspace_runtime, datasource_id)
+        await workspace_runtime.write_internal_text_files(entries)
+        if prune_stale and keep_paths is not None:
+            await _prune_stale_semantic_files(workspace_runtime, keep_paths)
 
 
 async def materialize_runtime_semantic_models(
@@ -555,9 +586,15 @@ async def materialize_runtime_semantic_models(
     """
     normalized_ids = _normalize_config_ids(semantic_config_ids)
     if not normalized_ids:
-        # 空启用集也必须清理：否则上一轮物化的 _ontology_catalog.yaml /
-        # _semantic_catalog.yaml 会残留，被后续 run 当作有效目录读取。
-        await _prune_empty_scope_semantic_files(workspace_runtime, prune_stale)
+        # 空启用集也必须切 ref 并清理：否则会继续读取上一个数据源组目录，
+        # 或把上一轮 _ontology_catalog.yaml / _semantic_catalog.yaml 当成有效目录。
+        await _write_semantic_entries_locked(
+            workspace_runtime,
+            datasource_id=datasource_id,
+            entries=[],
+            prune_stale=prune_stale,
+            keep_paths=set(keep_extra_paths or ()),
+        )
         return {"directory": [], "paths": {}, "configs": {}, "failed_ids": []}
 
     # 字段数据字典按数据源整体拉取一次，所有模型复用；
@@ -602,8 +639,7 @@ async def materialize_runtime_semantic_models(
             logger.warning("生成语义资产目录失败（模型快照不受影响）: %s", exc)
 
     written_at = time.perf_counter()
-    await workspace_runtime.write_internal_text_files(entries)
-    write_ms = (time.perf_counter() - written_at) * 1000
+    keep_paths: set[str] | None = None
     if prune_stale:
         # 保留集以“加载成功的启用模型”为准而非 entries：
         # 转换失败的模型仍启用，不应因本轮转换异常丢掉原本有效的 YAML。
@@ -613,7 +649,14 @@ async def materialize_runtime_semantic_models(
         if include_semantic_catalog:
             keep_paths.add(catalog_path)
         keep_paths.update(path for path in (keep_extra_paths or {}) if path)
-        await _prune_stale_semantic_files(workspace_runtime, keep_paths)
+    await _write_semantic_entries_locked(
+        workspace_runtime,
+        datasource_id=datasource_id,
+        entries=entries,
+        prune_stale=prune_stale,
+        keep_paths=keep_paths,
+    )
+    write_ms = (time.perf_counter() - written_at) * 1000
     logger.info(
         "语义模型按需物料化完成: datasource_id=%s files=%s cache_hits=%s backend=%s 渲染=%.0fms 写盘=%.0fms",
         datasource_id,

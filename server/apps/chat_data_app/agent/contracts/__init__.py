@@ -4,6 +4,7 @@
 下层能力，由装配层注入具体实现，避免子包之间形成反向依赖或环。
 """
 
+from .business_context import BusinessContext
 from .inbox import ClaimedInboxMessages, InboxPort
 
-__all__ = ["ClaimedInboxMessages", "InboxPort"]
+__all__ = ["BusinessContext", "ClaimedInboxMessages", "InboxPort"]

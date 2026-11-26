@@ -21,6 +21,8 @@ from apps.chat_data_app.agent.run.agent_inbox_service import (
 from apps.chat_data_app.agent.run.agent_inbox_service import load_run_content as _load_run_content
 from apps.chat_data_app.daos.agent_inbox_dao import AgentInboxDao, agent_inbox_dao
 from apps.chat_data_app.daos.conversation_event_dao import ConversationEventDao
+from apps.chat_data_app.services.llm_config import get_chat_data_model_config, get_default_chat_data_model
+from apps.chat_data_app.tool_stream_progress import extract_tool_line_counts
 from utils.database import get_session
 from utils.db_failover import is_mysql_connection_error
 from utils.logger import get_logger
@@ -34,8 +36,28 @@ EVENT_ASSISTANT_MESSAGE = "assistant_message"
 EVENT_TOOL_RESULT = "tool_result"
 EVENT_CONTEXT_COMPRESSION = "context_compression"
 EVENT_TOKEN_USAGE = "token_usage"
+EVENT_TURN_ERROR = "turn_error"
 EVENT_APPEND_MAX_ATTEMPTS = 3
 EVENT_APPEND_RETRY_DELAY_SECONDS = 0.05
+
+
+def _resolve_registered_model_id(model: str | None) -> str:
+    """把请求模型名归一成前端模型选择器使用的注册表 ID。
+
+    ``generation_stats.model`` 来自上游模型调用记录，可能是 ``request_model``
+    而不是注册键；前端只认注册键。空值（旧会话没有模型字段、无人值守 Run
+    未显式传模型）回退当前默认模型，与实际执行落点一致。
+    """
+    raw = str(model or "").strip()
+    try:
+        if not raw:
+            return get_default_chat_data_model()
+        config = get_chat_data_model_config(raw)
+        return str(config.get("id") or raw)
+    except Exception:
+        # 注册表不可用时不能拖垮会话打开；原值仍比空串更接近真实使用模型。
+        logger.warning("归一会话模型 ID 失败: model=%r", raw, exc_info=True)
+        return raw
 
 
 def _compare_stream_ids(left: str, right: str) -> int:
@@ -148,6 +170,52 @@ class ConversationEventService:
         if persisted_signatures is not None:
             for event in events:
                 persisted_signatures[str(event.get("event_key") or "").strip()] = _event_signature(event)
+
+    async def persist_turn_error(
+        self,
+        *,
+        conversation_id: str,
+        user_id: str,
+        operator_name: str,
+        turn_id: str,
+        error: str,
+        error_type: str | None = None,
+        run_id: str | None = None,
+        supersteps: int | None = None,
+        recursion_limit: int | None = None,
+    ) -> None:
+        """持久化本轮终止原因，供刷新后回放失败提示。
+
+        turn_error 只进入历史事件，不进入模型消息，因此不会污染下一轮上下文；
+        event_key 按 Run 固定，保证同一 Run 重复收口只保留一条错误，重试产生的
+        新错误则追加在后，由前端以最后一条状态为准。
+        """
+        if not turn_id or not error:
+            logger.warning("跳过无轮次或无文案的失败事件: conversation_id=%s", conversation_id)
+            return
+        payload: dict[str, Any] = {
+            "error": error,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        if error_type:
+            payload["error_type"] = error_type
+        if isinstance(supersteps, int) and supersteps > 0:
+            payload["supersteps"] = supersteps
+        if isinstance(recursion_limit, int) and recursion_limit > 0:
+            payload["recursion_limit"] = recursion_limit
+        await self._append_events(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            operator_name=operator_name,
+            events=[
+                _event(
+                    turn_id=turn_id,
+                    event_key=f"turn_error:{turn_id}:{run_id or 'run'}",
+                    event_type=EVENT_TURN_ERROR,
+                    payload=payload,
+                )
+            ],
+        )
 
     async def _commit_turn_checkpoint_once(
         self,
@@ -296,7 +364,8 @@ class ConversationEventService:
         include_derived: bool = True,
         limit: int | None = None,
         before_sequence: int | None = None,
-        strict_limit: bool = False,
+        limit_turns: int | None = None,
+        before_turn_sequence: int | None = None,
     ) -> dict[str, Any]:
         """在同一事务读取历史和活跃 Run 的恢复水位。
 
@@ -305,14 +374,29 @@ class ConversationEventService:
         payload 字节数随会话线性增长，是历史加载变慢的主因。
         """
         async with self._dao.session_context() as session:
-            rows, has_more = await self._dao.list_visible_event_window_in_session(
-                session,
-                conversation_id=conversation_id,
-                user_id=user_id,
-                limit=limit,
-                before_sequence=before_sequence,
-                strict_limit=strict_limit,
-            )
+            earliest_turn_sequence: int | None = None
+            turn_offset = 0
+            if limit_turns is not None:
+                (
+                    rows,
+                    has_more,
+                    earliest_turn_sequence,
+                    turn_offset,
+                ) = await self._dao.list_visible_turn_window_in_session(
+                    session,
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    limit_turns=limit_turns,
+                    before_turn_sequence=before_turn_sequence,
+                )
+            else:
+                rows, has_more = await self._dao.list_visible_event_window_in_session(
+                    session,
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    limit=limit,
+                    before_sequence=before_sequence,
+                )
             try:
                 token_usage_payload = await self._dao.get_latest_token_usage_payload_in_session(
                     session,
@@ -335,7 +419,10 @@ class ConversationEventService:
                 **self._build_history_payload(rows, token_usage_payload, include_derived),
                 "active_run": self._active_run_payload(active_run),
                 "has_more": has_more,
+                "has_more_turns": has_more,
                 "earliest_sequence_no": int(rows[0].sequence_no) if rows else None,
+                "earliest_turn_sequence": earliest_turn_sequence,
+                "turn_offset": turn_offset,
             }
 
     @staticmethod
@@ -351,6 +438,8 @@ class ConversationEventService:
             payload = _load_payload(row.payload)
             if not payload:
                 continue
+            if row.event_type == EVENT_ASSISTANT_MESSAGE:
+                payload = _with_history_tool_line_counts(payload)
             history_events.append(
                 {
                     "sequence_no": int(row.sequence_no),
@@ -375,11 +464,21 @@ class ConversationEventService:
         if run is None:
             return None
         content = _load_run_content(run.record_content)
+        started_wall_ms = content.get("stream_started_wall_ms")
+        runtime_context = content.get("runtime_context")
+        raw_model_id = (
+            str((runtime_context or {}).get("model_id") or "").strip() if isinstance(runtime_context, dict) else ""
+        )
+        model_id = _resolve_registered_model_id(raw_model_id)
         return {
             "run_id": run.run_id,
             "status": run.record_status,
             "turn_id": str(content.get("turn_id") or "") or None,
             "is_continuation": content.get("run_kind") == "continuation",
+            "model_id": model_id or None,
+            "stream_started_wall_ms": (
+                int(started_wall_ms) if isinstance(started_wall_ms, (int, float)) and int(started_wall_ms) > 0 else None
+            ),
             "history_checkpoint": normalize_history_checkpoint(content, run.run_id),
         }
 
@@ -392,6 +491,26 @@ class ConversationEventService:
                 user_id=user_id,
             )
         return _load_payload(raw_payload)
+
+    async def get_latest_model_id(self, *, conversation_id: str, user_id: str) -> str:
+        """读取会话实际使用的模型：运行中取当前 Run，否则取最后一条助手回复。"""
+        async with self._dao.session_context() as session:
+            active_run = await self._inbox_dao.get_active_run_snapshot(session, conversation_id, user_id)
+            if active_run is not None:
+                runtime_context = _load_run_content(active_run.record_content).get("runtime_context")
+                if isinstance(runtime_context, dict):
+                    return _resolve_registered_model_id(runtime_context.get("model_id"))
+                return _resolve_registered_model_id(None)
+            raw_payload = await self._dao.get_latest_assistant_payload_in_session(
+                session,
+                conversation_id=conversation_id,
+                user_id=user_id,
+            )
+        payload = _load_payload(raw_payload) or {}
+        generation_stats = payload.get("generation_stats")
+        if not isinstance(generation_stats, dict):
+            return _resolve_registered_model_id(None)
+        return _resolve_registered_model_id(generation_stats.get("model"))
 
     async def get_first_user_message(self, *, conversation_id: str, user_id: str) -> str | None:
         """读取首条有效用户消息正文，不加载完整会话历史。"""
@@ -601,6 +720,13 @@ def _build_turn_events_human_message(
 ) -> None:
     message_id = _message_id(message)
     if not message_id:
+        return
+    if (getattr(message, "additional_kwargs", None) or {}).get("hide_from_ui"):
+        # 后台任务通知只进入模型上下文，不写入用户历史/气泡；但仍要推进
+        # 该消息锚点后的压缩事件，避免压缩分隔卡丢失。
+        _build_turn_events_anchor_events(events, compression_events_by_anchor, message_id, turn_id)
+        if unanchored_compression_events:
+            _build_turn_events_flush_unanchored(events, unanchored_compression_events, turn_id)
         return
     events.append(
         _event(
@@ -834,9 +960,17 @@ def _serialize_human_message(message: HumanMessage) -> dict[str, Any]:
         "timestamp": _timestamp(message),
     }
     # vision_attachments 与 message_compose.select_vision_attachments 对应；
-    # quoted_snippets 为划选引用片段（结构化留痕），历史回放据此渲染引用 chip；
-    # 不直接 import 是为了避免 services 反向依赖 agent.middleware。
-    for key in ("file_ids", "file_selections", "quoted_snippets", "reasoning_turn_id", "vision_attachments"):
+    # quoted_snippets 为划选引用片段、annotations 为文档选中内容，均为结构化
+    # 留痕，历史回放据此渲染 chip；不直接 import 是为了避免 services 反向依赖
+    # agent.middleware。
+    for key in (
+        "file_ids",
+        "file_selections",
+        "quoted_snippets",
+        "annotations",
+        "reasoning_turn_id",
+        "vision_attachments",
+    ):
         if additional_kwargs.get(key):
             payload[key] = additional_kwargs[key]
     return payload
@@ -920,7 +1054,7 @@ def _serialize_ai_message(message: AIMessage) -> dict[str, Any]:
 
 
 def _serialize_subagent_artifacts(message: ToolMessage) -> dict[str, Any]:
-    """task 工具的子过程产物：过程快照 / 上下文用量 / token 用量 / 压缩记录 / 计量明细。"""
+    """subagent 工具的子过程产物：过程快照 / 上下文用量 / token 用量 / 压缩记录 / 计量明细。"""
     additional_kwargs = getattr(message, "additional_kwargs", None) or {}
     artifacts: dict[str, Any] = {}
     trail = additional_kwargs.get("subagent_trail")
@@ -938,6 +1072,12 @@ def _serialize_subagent_artifacts(message: ToolMessage) -> dict[str, Any]:
     token_detail = additional_kwargs.get("subagent_token_usage_detail")
     if isinstance(token_detail, dict) and token_detail:
         artifacts["subagent_token_usage_detail"] = token_detail
+    supersteps = additional_kwargs.get("subagent_supersteps")
+    if isinstance(supersteps, int) and supersteps > 0:
+        artifacts["subagent_supersteps"] = supersteps
+    recursion_limit = additional_kwargs.get("subagent_recursion_limit")
+    if isinstance(recursion_limit, int) and recursion_limit > 0:
+        artifacts["subagent_recursion_limit"] = recursion_limit
     return artifacts
 
 
@@ -967,6 +1107,30 @@ def _extract_reasoning_content(message: AIMessage) -> str:
             if isinstance(value, str) and value:
                 return value
     return ""
+
+
+def _with_history_tool_line_counts(payload: dict[str, Any]) -> dict[str, Any]:
+    """历史回放补齐 file_write/file_edit 的 +N/-M。
+
+    旧事件只持久化了 tool_calls.args，没有行数字段；这里统一按参数现算，
+    避免前端为历史另写一套统计口径，老会话也能恢复行数。
+    """
+    tool_calls = payload.get("tool_calls")
+    if not isinstance(tool_calls, list):
+        return payload
+    for tool_call in tool_calls:
+        if not isinstance(tool_call, dict):
+            continue
+        args = tool_call.get("args")
+        counts = extract_tool_line_counts(
+            str(tool_call.get("name") or ""),
+            args if isinstance(args, dict) else {},
+        )
+        if counts is None:
+            continue
+        tool_call.setdefault("content_lines", counts[0])
+        tool_call.setdefault("removed_lines", counts[1])
+    return payload
 
 
 def _load_payload(raw_payload: str | None) -> dict[str, Any] | None:

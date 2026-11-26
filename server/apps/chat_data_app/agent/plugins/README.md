@@ -50,18 +50,40 @@ CHAT_DATA_HOME/plugins/<name>/
 
 | 声明 | 消费点 | 生效时机 |
 | --- | --- | --- |
-| `skills` | `loader.enabled_plugin_skill_sources()` → `skill_service.list_runtime_skill_sources_async()` → 会话 runtime-skills 快照 | 新会话/下一次快照重建（技能指纹变更自动触发）；与系统/用户技能同名时跳过并告警 |
+| `skills` | `loader.enabled_plugin_skill_sources(username)` → `skill_service.list_runtime_skill_sources_async()` → 会话 runtime-skills 快照 | 新会话/下一次快照重建（技能指纹变更自动触发）；与系统/用户技能同名时跳过并告警 |
 | `mcp_servers` | `loader.enabled_plugin_mcp_servers()` → `mcp/config.load_mcp_server_configs()` → agent 装配 | 下一次 agent 装配（新运行） |
+
+磁盘 manifest 按 ``plugin.json`` 的 ``(mtime_ns, size)`` 指纹缓存：每轮扫描逐插件
+``stat``，文件被原地修改后下一轮即生效，不需要重启或跨 worker 广播；安装/卸载路径
+仍会显式清空缓存。
 
 启停读取链路：`loader.refresh_plugin_state()` 从 DB 拉启用名集合写入进程内快照
 `_enabled_state`，装配/技能快照/管理列表三个入口都先 `await` 它。DB 读失败按
 fail-closed 处理（快照清空、当轮全部按禁用，不兜底旧值），因此**表不可用 = 插件静默
 不生效**，排障先看 `刷新插件启停状态失败` 日志。
 
+## 人员权限
+
+插件权限以 `chat_data_plugin.scope_type` 和 `chat_data_plugin_permission.user_name` 为准：
+
+- `scope_type=all`：所有已认证用户可用，不读取人员授权行；
+- `scope_type=selected`：仅 username 命中的已认证用户可用；username 缺失时 fail-closed；
+- username 只取服务端认证层转发的 `X-Username`，不读取请求体或前端自报身份；
+- 插件声明的技能随插件授权：用户技能列表、详情和运行快照都按 username 过滤；
+- 管理端技能总览与详情使用全量视图，不受当前管理员自身插件授权影响；
+- 撤销授权只软删，同一 `(plugin_name, user_name)` 再次授权时复活原行。
+
+`chat_data_plugin_permission` 只服务于插件及其技能。插件声明的 MCP server 当前仍按
+`enabled_flag` 装配，明确不读取本表；MCP 人员授权后续使用自己的权限表，避免两类授权耦合。
+
 ## 管理入口
 
 前端：后台管理 → 插件（`web-vue/src/views/chat-data/components/PluginAdminPanel.vue`，
-由 `ChatDataAdminManager.vue` 挂载），支持列表分页、插件模板下载、MCP 工具探测、zip 安装、启停开关、卸载二次确认。
+由 `ChatDataAdminManager.vue` 挂载），支持列表分页、插件模板下载、MCP 工具探测、zip 安装、启停开关、
+人员授权与卸载二次确认。列表不展示人员授权明细；行内授权按钮以 users / user-lock 图标区分
+全部用户或指定人员，点击后在弹窗中查看和修改。MCP server 列只展示数量摘要，点击后在
+独立列表中查看 server、连接方式、地址、工具配置与准入状态；工具探测结果在同一弹窗下方
+展示，工具参数详情也在下方切换，不再叠加第二层弹窗。
 
 接口（`routers/plugins.py`，service token 保护）：
 
@@ -70,19 +92,26 @@ fail-closed 处理（快照清空、当轮全部按禁用，不兜底旧值）�
 - `GET  /api/chatdata/admin/plugins/{plugin_id}/mcp-servers/{server_id}/tools`：临时连接 MCP server 探测工具清单（不执行工具、不落库）；
 - `GET  /api/chatdata/admin/plugins`：列出已安装插件（含审计字段，分页 limit∈[1,200]）；
 - `POST /api/chatdata/admin/plugins/install`：上传 zip 安装（≤50MB，manifest 校验、
-  zip-slip/符号链接/解压总量防护，同名拒绝）；
+  zip-slip/符号链接/解压总量防护，同名拒绝；隐藏唯一临时目录 + rename 原子落盘，
+  多节点并发安装同名插件互不覆盖）；
 - `PUT  /api/chatdata/admin/plugins/{plugin_id}/enabled`：启用/禁用（写 DB
   `enabled_flag`，立即影响新会话快照与新装配）；
+- `PUT  /api/chatdata/admin/plugins/{plugin_id}/permissions`：设置 `all` 或 `selected`
+  人员权限；`selected` 使用 username 列表，服务端去空格、精确去重并保留大小写；
 - `DELETE /api/chatdata/admin/plugins/{plugin_id}`：卸载（删磁盘目录 + 软删 DB 行）。
 
 安装先解包落盘再写 DB，DB 写失败回滚目录；卸载先删盘后软删 DB。重装按 `plugin_name`
-复活同一行（单列 UNIQUE + `delete_flag` 翻转），可无限次装卸循环。磁盘有目录而 DB 无行
-的"半装态"插件，在列表里审计字段留空，触发一次启停即自愈补行。
+复活同一行（单列 UNIQUE + `delete_flag` 翻转），可无限次装卸循环；重装保留原
+`scope_type`，但卸载时已软删的人员授权不会自动恢复。原 `selected` 插件重装后仍是
+`selected` 且暂无授权用户，需管理员重新配置；不会自动扩大为全员可用。磁盘有目录而
+DB 无行的"半装态"插件，在列表里审计字段留空，触发一次启停即自愈补行。
 
 ## 上线前置
 
 - 建表：`chat_data_plugin` 的 DDL 在 `utils/schema.py` 的
-  `MYSQL_CHAT_DATA_PLUGIN_TABLE`，**需在业务库手工执行**（生产代码无自动建表入口）。
+  `MYSQL_CHAT_DATA_PLUGIN_TABLE`；人员权限表见
+  `MYSQL_CHAT_DATA_PLUGIN_PERMISSION_TABLE`。两者都**需在业务库手工执行**
+  （生产代码无自动建表入口），存量升级 SQL 见 `next_version.md`。
 - 迁移：历史版本（磁盘 `.disabled` 时代）遗留的插件目录，执行一次
   `server/scripts/migrate_plugins_to_db.py` 把启停状态导入 DB。
 

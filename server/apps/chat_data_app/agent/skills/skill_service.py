@@ -345,7 +345,12 @@ def _system_metadata_to_info(item: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _plugin_skill_rows(existing_names: set[str]) -> list[dict[str, Any]]:
+def _plugin_skill_rows(
+    existing_names: set[str],
+    *,
+    username: str = "",
+    include_all_plugins: bool = False,
+) -> list[dict[str, Any]]:
     """将已启用插件声明的技能转为前端展示行（source=plugin）。
 
     与会话技能快照同语义：与系统/用户技能同名时跳过（快照为扁平 /mnt/skills/<name>）。
@@ -355,7 +360,14 @@ def _plugin_skill_rows(existing_names: set[str]) -> list[dict[str, Any]]:
 
     rows: list[dict[str, Any]] = []
     source = get_skill_source()
-    for name, skill_dir in source.enabled_plugin_skill_sources() if source is not None else []:
+    plugin_sources = (
+        source.enabled_plugin_skill_sources_for_admin()
+        if source is not None and include_all_plugins
+        else source.enabled_plugin_skill_sources(username)
+        if source is not None
+        else []
+    )
+    for name, skill_dir in plugin_sources:
         if name in existing_names:
             continue
         try:
@@ -371,6 +383,26 @@ def _plugin_skill_rows(existing_names: set[str]) -> list[dict[str, Any]]:
         info["skill_id"] = f"plugin:{name}"
         rows.append(info)
     return rows
+
+
+def _plugin_name_by_skill() -> dict[str, str]:
+    """插件技能名 → 插件名，供管理端目录树按「插件 → 技能」分组。
+
+    插件清单不可用时返回空映射：总览仍可展示技能，只是归到「未归属插件」分组，
+    不应因为插件状态读取失败而让整个只读列表报错。
+    """
+    try:
+        from ..plugins.loader import enabled_plugins
+
+        mapping: dict[str, str] = {}
+        for plugin in enabled_plugins():
+            plugin_name = str(getattr(plugin.manifest, "name", "") or "")
+            for skill_name in getattr(plugin.manifest, "skills", None) or []:
+                mapping.setdefault(str(skill_name), plugin_name)
+        return mapping
+    except Exception as err:
+        logger.warning("读取插件技能归属失败: %s", err)
+        return {}
 
 
 def _build_skill_md(payload: dict[str, Any]) -> str:
@@ -483,6 +515,7 @@ class SkillService:
         system_metadata: dict[str, SkillMetadata],
         user_id: str,
         user_names: dict[str, str] | None,
+        username: str,
     ) -> list[dict[str, Any]]:
         """合并 DB 用户技能行、文件系统系统技能与插件技能为统一的展示行。"""
         source_rows = (
@@ -496,7 +529,12 @@ class SkillService:
         )
         for item in system_metadata.values():
             source_rows.append(_system_metadata_to_info(item))
-        source_rows.extend(_plugin_skill_rows(existing_names={str(item.get("name") or "") for item in source_rows}))
+        source_rows.extend(
+            _plugin_skill_rows(
+                existing_names={str(item.get("name") or "") for item in source_rows},
+                username=username,
+            )
+        )
         return source_rows
 
     @staticmethod
@@ -533,6 +571,7 @@ class SkillService:
         user_id: str = "",
         scope: str = "all",
         user_names: dict[str, str] | None = None,
+        username: str = "",
     ) -> list[dict[str, Any]]:
         source = get_skill_source()
         if source is not None:
@@ -542,7 +581,13 @@ class SkillService:
         normalized_category = str(category or "").strip()
         skills: list[dict[str, Any]] = []
         system_metadata = await asyncio.to_thread(load_metadata)
-        source_rows = self._collect_skill_source_rows(db_rows, system_metadata, user_id, user_names)
+        source_rows = self._collect_skill_source_rows(
+            db_rows,
+            system_metadata,
+            user_id,
+            user_names,
+            username,
+        )
         for item in source_rows:
             if not self._skill_matches_scope(item, scope, user_id):
                 continue
@@ -551,11 +596,71 @@ class SkillService:
             skills.append(item)
         return sorted(skills, key=lambda value: (str(value.get("source") or ""), str(value.get("name") or "")))
 
+    async def list_all_skills_async(self) -> list[dict[str, Any]]:
+        """管理端只读总览：系统 + 全部用户技能 + 插件技能（跨用户、含停用/草稿/私有）。
+
+        与 ``list_skills_async`` 的差异只在数据范围：不套个人可见性过滤；用户技能行按
+        ``owner_user_id`` 自身构造展示信息，因此草稿版本与创建人字段完整，但不代表
+        管理端具备写权限（面板只调用只读接口）。
+        """
+        source = get_skill_source()
+        if source is not None:
+            await source.refresh_plugin_state()
+        db_rows = await self.dao.list_all_skills_async()
+        source_rows: list[dict[str, Any]] = [
+            _skill_row_to_info(row, user_id=str(row.get("owner_user_id") or ""))
+            for row in db_rows
+            if row.get("skill_source") == "user"
+        ]
+        system_metadata = await asyncio.to_thread(load_metadata)
+        for item in system_metadata.values():
+            source_rows.append(_system_metadata_to_info(item))
+        plugin_rows = _plugin_skill_rows(
+            existing_names={str(item.get("name") or "") for item in source_rows},
+            include_all_plugins=True,
+        )
+        plugin_names = _plugin_name_by_skill()
+        for row in plugin_rows:
+            row["plugin_name"] = plugin_names.get(str(row.get("name") or ""), "")
+        source_rows.extend(plugin_rows)
+        return sorted(
+            source_rows,
+            key=lambda value: (str(value.get("source") or ""), str(value.get("name") or "")),
+        )
+
+    async def get_skill_owner_for_admin_async(self, name: str) -> str:
+        """管理端只读详情前解析技能真实归属；系统 / 插件技能返回空串。
+
+        既有详情与文件读取链路都按 ``user_id`` 做属主校验，管理端先跨用户查出真实
+        属主，再以属主身份复用同一只读实现，避免复制一套绕过校验的路径解析逻辑。
+        """
+        value = str(name or "").strip()
+        if not value or value.startswith("plugin:"):
+            return ""
+        if await self._get_system_skill_metadata_async(value):
+            return ""
+        try:
+            row = await self.dao.get_skill_for_admin_async(value)
+        except Exception as err:
+            logger.warning("管理端解析技能归属失败: name=%s error=%s", value, err)
+            return ""
+        return str(row.get("owner_user_id") or "") if row else ""
+
     async def get_skill_async(
-        self, name: str, include_draft: bool = False, user_id: str = "", user_names: dict[str, str] | None = None
+        self,
+        name: str,
+        include_draft: bool = False,
+        user_id: str = "",
+        user_names: dict[str, str] | None = None,
+        username: str = "",
+        include_all_plugin_skills: bool = False,
     ) -> dict[str, Any] | None:
         if str(name).startswith("plugin:"):
-            return await self._get_plugin_skill_detail_async(str(name))
+            return await self._get_plugin_skill_detail_async(
+                str(name),
+                username=username,
+                include_all_plugins=include_all_plugin_skills,
+            )
         skill = await self._get_system_skill_detail_async(name)
         if skill:
             return skill
@@ -563,14 +668,27 @@ class SkillService:
             name, include_draft=include_draft, user_id=user_id, user_names=user_names
         )
 
-    async def _get_plugin_skill_detail_async(self, name: str) -> dict[str, Any] | None:
+    async def _get_plugin_skill_detail_async(
+        self,
+        name: str,
+        *,
+        username: str = "",
+        include_all_plugins: bool = False,
+    ) -> dict[str, Any] | None:
         """读取插件技能详情；列表用 plugin:<name> 作为唯一 id。"""
         from ..contracts.skill_source import get_skill_source
         from .loader import parse_metadata
 
         plugin_skill_name = name[len("plugin:") :]
         source = get_skill_source()
-        for skill_name, skill_dir in source.enabled_plugin_skill_sources() if source is not None else []:
+        plugin_sources = (
+            source.enabled_plugin_skill_sources_for_admin()
+            if source is not None and include_all_plugins
+            else source.enabled_plugin_skill_sources(username)
+            if source is not None
+            else []
+        )
+        for skill_name, skill_dir in plugin_sources:
             if skill_name != plugin_skill_name:
                 continue
             metadata = await asyncio.to_thread(parse_metadata, skill_dir / "SKILL.md")
@@ -595,7 +713,11 @@ class SkillService:
             return system_meta
         return await self._get_db_skill_metadata_async(name, user_id=user_id)
 
-    async def list_runtime_skill_sources_async(self, user_id: str) -> list[tuple[str, Path]]:
+    async def list_runtime_skill_sources_async(
+        self,
+        user_id: str,
+        username: str = "",
+    ) -> list[tuple[str, Path]]:
         """返回运行期可加载技能的 ``(name, 当前版本目录)``。
 
         可见集合 = 系统技能 + 当前用户自己的当前版本 + 他人 ``visibility_type=global``
@@ -613,7 +735,7 @@ class SkillService:
                 out.append((name, skill_dir))
         # 插件技能：与系统/用户技能同名时跳过（快照是扁平 /mnt/skills/<name>，不允许重名）。
         existing_names = {name for name, _dir in out}
-        plugin_sources = source.enabled_plugin_skill_sources() if source is not None else []
+        plugin_sources = source.enabled_plugin_skill_sources(username) if source is not None else []
         for name, skill_dir in plugin_sources:
             if name in existing_names:
                 logger.warning("插件技能与现有技能同名，跳过快照纳入: %s", name)
@@ -1194,10 +1316,10 @@ class SkillService:
                     file_size += len(chunk)
                     if file_size > max_upload_size:
                         raise ValueError(f"文件大小不能超过{max_upload_size_mb}MB")
-                    output.write(chunk)
-                output.flush()
-                os.fsync(output.fileno())
-            os.replace(temporary_path, target)
+                    await asyncio.to_thread(output.write, chunk)
+                await asyncio.to_thread(output.flush)
+                await asyncio.to_thread(os.fsync, output.fileno())
+            await asyncio.to_thread(os.replace, temporary_path, target)
         finally:
             temporary_path.unlink(missing_ok=True)
         clear_metadata_cache()
@@ -1627,5 +1749,11 @@ skill_service = SkillService()
 class SkillSnapshotSource:
     """把 SkillService 的技能源查询适配成 workspace 快照端口。"""
 
-    async def list_runtime_skill_sources_async(self, user_id: str) -> list[tuple[str, Path]]:
+    async def list_runtime_skill_sources_async(
+        self,
+        user_id: str,
+        username: str = "",
+    ) -> list[tuple[str, Path]]:
+        if username:
+            return await skill_service.list_runtime_skill_sources_async(user_id, username=username)
         return await skill_service.list_runtime_skill_sources_async(user_id)

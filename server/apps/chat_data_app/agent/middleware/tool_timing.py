@@ -12,6 +12,8 @@ from langgraph.types import Command
 
 from utils.logger import get_logger
 
+from ..tool_execution_timing import begin_tool_execution_clock, reset_tool_execution_clock
+
 logger = get_logger(__name__)
 
 
@@ -29,9 +31,13 @@ def create_tool_timing_middleware() -> AgentMiddleware:
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
     ) -> ToolMessage | Command[Any]:
-        started_at_ms = int(time.time() * 1000)
-        result = await handler(request)
+        clock, token = begin_tool_execution_clock()
+        try:
+            result = await handler(request)
+        finally:
+            reset_tool_execution_clock(token)
         ended_at_ms = int(time.time() * 1000)
+        started_at_ms = clock.execution_started_at_ms or clock.wrapper_started_at_ms
         message = _extract_tool_message(result)
         if message is not None:
             additional_kwargs = dict(getattr(message, "additional_kwargs", None) or {})
@@ -63,7 +69,7 @@ def create_tool_timing_middleware() -> AgentMiddleware:
 def _extract_tool_message(result: Any) -> ToolMessage | None:
     """从工具返回值里取需要盖时间戳的 ToolMessage。
 
-    多数工具直接返回 ToolMessage；``task``（子智能体）等工具返回 ``Command``
+    多数工具直接返回 ToolMessage；``subagent``（子智能体）等工具返回 ``Command``
     通过 ``update.messages`` 注入结果消息，若只看 ToolMessage 会漏掉这些工具，
     导致前端/历史回放没有总耗时。
     """

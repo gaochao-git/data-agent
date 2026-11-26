@@ -98,7 +98,7 @@ def test_scan_disk_plugins_skips_non_directory_entries(plugin_root: Path):
     found = plugin_loader._scan_disk_plugins()
 
     assert list(found) == ["ops-readonly"]
-    assert found["ops-readonly"][1] == plugin_dir
+    assert found["ops-readonly"].dir == plugin_dir
 
 
 def test_scan_disk_plugins_skips_broken_and_mismatched_manifests(plugin_root: Path):

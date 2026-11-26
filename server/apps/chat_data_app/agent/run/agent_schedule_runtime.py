@@ -34,6 +34,8 @@ from apps.chat_data_app.agent.run.agent_inbox_service import (
 )
 from apps.chat_data_app.agent.run.agent_run_runtime import agent_run_runtime
 from apps.chat_data_app.agent.run.completion_options import parse_completion_run_options
+from apps.chat_data_app.agent.run.executor_gate import configured_node_id, is_executor_allowed
+from apps.chat_data_app.agent.run.run_context import RunContext, RunSource, build_run_context
 from apps.chat_data_app.daos.agent_schedule_dao import (
     RUN_STATUS_TO_TRIGGER_STATUS,
     SCHEDULE_RUN_STATUS_CLAIMED,
@@ -130,6 +132,8 @@ class AgentScheduleRuntime:
         self._dao = dao
         self._inbox_service = inbox_service
         self._node_id = node_id or f"{socket.gethostname()}:{os.getpid()}"
+        # 与 Agent Run 执行准入共用同一节点白名单；不使用 hostname 兜底。
+        self._executor_node_id = configured_node_id()
         self._poll_task: asyncio.Task | None = None
 
     async def _resolve_poll_seconds(self) -> float:
@@ -146,6 +150,14 @@ class AgentScheduleRuntime:
         if self._user_max_concurrency is not None:
             return self._user_max_concurrency
         return await get_runtime_setting("CHAT_DATA_SCHEDULE_USER_MAX_CONCURRENCY")
+
+    async def _is_executor_allowed(self) -> bool:
+        """Standby 节点不参与定时任务调度；与 Agent Run 共用同一判断。"""
+        return await is_executor_allowed(self._executor_node_id, setting_reader=get_runtime_setting)
+
+    async def is_executor_allowed(self) -> bool:
+        """供路由在创建触发实例前判断当前节点是否有执行资格。"""
+        return await self._is_executor_allowed()
 
     async def start(self) -> None:
         if not self.enabled:
@@ -181,6 +193,9 @@ class AgentScheduleRuntime:
         全局暂停（后台一键暂停）只冻结新触发的计划与派发，已派发 Run 的
         状态收口与悬挂 claimed 回收继续执行，保证暂停前后状态口径一致。
         """
+        if not await self._is_executor_allowed():
+            logger.debug("定时任务调度跳过：当前节点不在执行白名单 node_id=%s", self._executor_node_id)
+            return
         await self._finalize_dispatched()
         await self._reap_stale_claims(now)
         if await self._is_paused():
@@ -399,28 +414,22 @@ class AgentScheduleRuntime:
                 "job_title": job.job_title,
             }
 
-    def _build_runtime_context(self, job: dict) -> dict:
+    def _build_runtime_context(self, job: dict) -> RunContext:
         # 复用 chat 完成链路的 options 解析，保证运行参数字段口径一致。
         options = job_options(job.get("options_json"))
         run_options = parse_completion_run_options(options)
-        return {
-            "query": job["job_prompt"],
-            "datasource_id": run_options.datasource_id,
-            "member_datasource_ids": run_options.member_datasource_ids,
-            "semantic_config_id": run_options.semantic_config_id,
-            "model_id": run_options.model_id,
-            "file_selections": run_options.file_selections,
-            "quoted_snippets": run_options.quoted_snippets,
-            "enable_thinking": run_options.enable_thinking,
-            "thinking_effort": run_options.thinking_effort,
-            "skill_names": run_options.skill_names,
-            "operator_name": job["create_by_name"] or "",
-            "options": options,
-            "file_ids": [],
+        return build_run_context(
+            source=RunSource.SCHEDULE,
+            run_options=run_options,
+            query=job["job_prompt"],
+            operator_name=job["create_by_name"] or "",
+            raw_options=options,
             # 无人值守标记：工具装配剔除 ask_user_question（用户不在场，
             # 提问后无人应答会让轮次悬挂在 waiting_user 等待）
-            "disable_user_interaction": True,
-        }
+            disable_user_interaction=True,
+            # 定时入口历史口径不携带 annotations，保持行为不变。
+            include_annotations=False,
+        )
 
     async def _mark_dispatched(self, trigger_id: int, run_id: str, conversation_id: str | None = None) -> None:
         async with get_session() as session:
@@ -465,6 +474,9 @@ class AgentScheduleRuntime:
         会话正忙等可重试错误会释放回 pending，由调度 tick 自动续派，此时
         返回 queued；全局暂停只冻结计划触发，不拦截用户主动的立即执行。
         """
+        if not await self._is_executor_allowed():
+            logger.warning("当前节点不在定时任务执行白名单，拒绝立即触发: node_id=%s", self._executor_node_id)
+            return {"status": SCHEDULE_RUN_STATUS_PENDING, "run_id": None, "reason": "not_executor"}
         async with get_session() as session:
             run = await self._dao.get_trigger_for_update(session, trigger_id)
             if run is None or run.trigger_status != SCHEDULE_RUN_STATUS_PENDING:

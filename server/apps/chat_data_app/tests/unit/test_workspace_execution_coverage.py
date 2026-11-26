@@ -62,7 +62,7 @@ def _chat_data_home(tmp_path, monkeypatch):
 
 def _workspace_root(tmp_path: Path) -> Path:
     root = tmp_path / "chat-data" / "threads" / "user_a" / "conv_a" / "user-data"
-    for name in ("workspace", "outputs", "outputs/.tool-offload", "uploads"):
+    for name in ("workspace", "outputs", "workspace/.system/tool-offload", "uploads"):
         (root / name).mkdir(parents=True, exist_ok=True)
     return root
 
@@ -303,11 +303,23 @@ def test_str_to_bool(monkeypatch):
 
 def test_workspace_session_ttl_seconds(monkeypatch):
     monkeypatch.setenv("OPENSANDBOX_TIMEOUT_SECONDS", "600")
-    assert we_session._workspace_session_ttl_seconds() == 300
+    assert we_session._workspace_session_ttl_seconds() == 570
     monkeypatch.setenv("OPENSANDBOX_TIMEOUT_SECONDS", "40")
     assert we_session._workspace_session_ttl_seconds() == 30
     monkeypatch.setenv("OPENSANDBOX_TIMEOUT_SECONDS", "1000")
-    assert we_session._workspace_session_ttl_seconds() == 300
+    assert we_session._workspace_session_ttl_seconds() == 970
+
+
+def test_refresh_workspace_execution_session_extends_cached_ttl(tmp_path):
+    """续期只延长远端实例还不够，进程缓存 TTL 也必须一起顺延。"""
+    root = _workspace_root(tmp_path)
+    session = _make_session(FakeSandbox(), root)
+    cache_key = _cache_key(root)
+    cached = _cached(session, ttl=1.0)
+    we_session._WORKSPACE_EXECUTION_SESSION_CACHE[cache_key] = cached
+    before = cached.expires_at
+    we_session.refresh_workspace_execution_session(session)
+    assert cached.expires_at > before
 
 
 def test_workspace_session_lock_reuses_instance():
@@ -405,16 +417,16 @@ def test_application_manifests(tmp_path, monkeypatch):
     root = _workspace_root(tmp_path)
     monkeypatch.setattr(we_paths, "CHAT_DATA_HOME", str(tmp_path))
     (root / "workspace" / "a.txt").write_text("aaa")
-    (root / "workspace" / "semantic" / "model.yaml").parent.mkdir(parents=True, exist_ok=True)
-    (root / "workspace" / "semantic" / "model.yaml").write_text("model")
-    (root / "outputs" / ".tool-offload" / "r.json").write_text("{}")
+    (root / "workspace" / ".system" / "semantic" / "model.yaml").parent.mkdir(parents=True, exist_ok=True)
+    (root / "workspace" / ".system" / "semantic" / "model.yaml").write_text("model")
+    (root / "workspace" / ".system" / "tool-offload" / "r.json").write_text("{}")
     (root / "uploads" / "u.csv").write_text("csv")
 
     full = we_sync._application_manifest(root)
     assert set(full) == {
         "workspace/a.txt",
-        "workspace/semantic/model.yaml",
-        "outputs/.tool-offload/r.json",
+        "workspace/.system/semantic/model.yaml",
+        "workspace/.system/tool-offload/r.json",
         "uploads/u.csv",
     }
     mutable = we_sync._mutable_application_manifest(root)
@@ -1211,7 +1223,7 @@ def test_sandbox_artifact_payload_branches(tmp_path, monkeypatch):
         asyncio.run(
             we_ops.sandbox_artifact_payload(
                 session_ref=ref,
-                file_path="/mnt/user-data/outputs/.tool-offload/x.json",
+                file_path="/mnt/user-data/workspace/.system/tool-offload/x.json",
             )
         )
         == {}
@@ -1613,7 +1625,7 @@ def test_sandbox_copy_path(tmp_path, monkeypatch):
         asyncio.run(
             we_ops.sandbox_copy_path(
                 session_ref=_ref(session),
-                source_path="/mnt/user-data/outputs/.tool-offload/r.json",
+                source_path="/mnt/user-data/workspace/.system/tool-offload/r.json",
                 destination_path="/mnt/user-data/workspace/r.json",
             )
         )
@@ -1889,7 +1901,7 @@ def test_sandbox_write_text_file(tmp_path, monkeypatch):
 
 def test_sandbox_write_internal_text_files(tmp_path, monkeypatch):
     root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
-    with pytest.raises(ValueError, match="内部系统写入"):
+    with pytest.raises(ValueError, match="内部语义模型写入"):
         asyncio.run(
             we_ops.sandbox_write_internal_text_files(
                 session_ref=_ref(session),
@@ -1899,12 +1911,13 @@ def test_sandbox_write_internal_text_files(tmp_path, monkeypatch):
     results = asyncio.run(
         we_ops.sandbox_write_internal_text_files(
             session_ref=_ref(session),
-            entries=[("/mnt/user-data/workspace/semantic/model.yaml", "a: 1")],
+            entries=[("/mnt/user-data/workspace/.system/semantic/model.yaml", "a: 1")],
         )
     )
     assert results[0]["bytes"] == 4
-    target = "/mnt/user-data/workspace/semantic/model.yaml"
+    target = "/mnt/user-data/workspace/.system/semantic/model.yaml"
     assert sandbox.remote_files[target] == b"a: 1"
+    assert not (root / "workspace" / "semantic" / "model.yaml").exists()
     no_writer_sandbox = FakeSandbox()
     no_writer_sandbox.files.write_files = None
     no_writer = _make_session(no_writer_sandbox, root)
@@ -1912,19 +1925,19 @@ def test_sandbox_write_internal_text_files(tmp_path, monkeypatch):
         asyncio.run(
             we_ops.sandbox_write_internal_text_files(
                 session_ref=_ref(no_writer),
-                entries=[("/mnt/user-data/workspace/semantic/model.yaml", "a: 1")],
+                entries=[("/mnt/user-data/workspace/.system/semantic/model.yaml", "a: 1")],
             )
         )
 
 
 def test_sandbox_delete_internal_text_file(tmp_path, monkeypatch):
     root, sandbox, session = _session_with_root(tmp_path, monkeypatch)
-    stale = "/mnt/user-data/workspace/semantic/已停用模型__deadbeef.yaml"
+    stale = "/mnt/user-data/workspace/.system/semantic/已停用模型__deadbeef.yaml"
     sandbox.remote_kinds[stale] = "file"
     sandbox.remote_files[stale] = b"stale"
 
-    # 策略层先拒：内部通道只允许 semantic/ontology 下的 YAML
-    with pytest.raises(ValueError, match="内部系统写入"):
+    # 策略层先拒：内部通道只允许 .system/semantic 下的 YAML
+    with pytest.raises(ValueError, match="内部语义模型写入"):
         asyncio.run(
             we_ops.sandbox_delete_internal_text_file(
                 session_ref=_ref(session),
@@ -2012,7 +2025,7 @@ def test_sandbox_write_tool_result(tmp_path, monkeypatch):
     result = asyncio.run(
         we_ops.sandbox_write_tool_result(
             session_ref=_ref(session),
-            file_path="/mnt/user-data/outputs/.tool-offload/r_1.json",
+            file_path="/mnt/user-data/workspace/.system/tool-offload/r_1.json",
             content="{}",
         )
     )
@@ -2021,7 +2034,7 @@ def test_sandbox_write_tool_result(tmp_path, monkeypatch):
         asyncio.run(
             we_ops.sandbox_write_tool_result(
                 session_ref=_ref(session),
-                file_path="/mnt/user-data/outputs/.tool-offload/r_1.json",
+                file_path="/mnt/user-data/workspace/.system/tool-offload/r_1.json",
                 content="{}",
             )
         )
@@ -2115,11 +2128,11 @@ def test_resolve_sandbox_target_for_batch_is_guarded_upstream():
     """非语义模型路径在 sandbox_visible_path 阶段即被拒绝（1927 是不可达的二次校验）。
 
     ``sandbox_visible_path(..., allow_managed_semantic_model_write=True)`` 已保证只有
-    ``workspace/semantic|ontology/*.yaml`` 能通过，故 1926 的
+    ``workspace/.system/semantic/*.yaml`` 能通过，故 1926 的
     ``_is_managed_semantic_model_sandbox_path`` 判定恒为 True，1927 的 raise 无法从
     公开入口触发。此处锁定上游的真实报错，防止该防御被误删后行为漂移。
     """
-    with pytest.raises(ValueError, match="内部系统写入"):
+    with pytest.raises(ValueError, match="内部语义模型写入"):
         we_ops._resolve_sandbox_target_for_batch(
             None,
             "/mnt/user-data/workspace/notes.txt",
@@ -2546,7 +2559,7 @@ def test_sandbox_write_tool_result_reraises_unexpected_read_error(tmp_path, monk
         asyncio.run(
             we_ops.sandbox_write_tool_result(
                 session_ref=_ref(session),
-                file_path="/mnt/user-data/outputs/.tool-offload/r_9.json",
+                file_path="/mnt/user-data/workspace/.system/tool-offload/r_9.json",
                 content="{}",
             )
         )

@@ -18,6 +18,10 @@ import type {
 } from '../types'
 import { extractSemanticParamsFromArgs, getQueryResultError, getRenderableQueryResultData } from '../utils/semanticTool'
 import { toGenerationStats } from '../utils/generationSpeed'
+import {
+  parseDocumentAnnotationBlocks,
+  stripUserMessageInternalSuffixes,
+} from '../utils/messageView'
 
 const parseHistoryTimestamp = (value: unknown): Date | null => {
   if (typeof value !== 'string' || !value.trim()) return null
@@ -128,6 +132,7 @@ interface HistoryMessagePayload {
   reasoning_content?: unknown
   file_selections?: unknown
   quoted_snippets?: unknown
+  annotations?: unknown
   tool_calls?: unknown
   tool_call_id?: unknown
   tool_name?: unknown
@@ -137,7 +142,11 @@ interface HistoryMessagePayload {
   subagent_token_usage?: unknown
   subagent_compactions?: unknown
   subagent_token_usage_detail?: unknown
+  subagent_supersteps?: unknown
+  subagent_recursion_limit?: unknown
   generation_stats?: unknown
+  error?: unknown
+  error_type?: unknown
 }
 
 interface HistoryEventPayload {
@@ -170,7 +179,14 @@ const normalizeContextCompressionEvent = (value: unknown): ChatDataContextCompre
 
 const getHistoryToolCall = (value: unknown): ToolCallInfo | null => {
   if (!value || typeof value !== 'object') return null
-  const toolCall = value as { id?: unknown; name?: unknown; args?: unknown; display_name?: unknown }
+  const toolCall = value as {
+    id?: unknown
+    name?: unknown
+    args?: unknown
+    display_name?: unknown
+    content_lines?: unknown
+    removed_lines?: unknown
+  }
   const toolCallId = String(toolCall.id || '').trim()
   const toolName = String(toolCall.name || '').trim()
   if (!toolCallId || !toolName) return null
@@ -180,6 +196,9 @@ const getHistoryToolCall = (value: unknown): ToolCallInfo | null => {
     display_name: String(toolCall.display_name || '').trim() || undefined,
     args: toolCall.args && typeof toolCall.args === 'object' ? toolCall.args as Record<string, unknown> : {},
     status: 'completed',
+    // 后端历史读取时按 args 现算补齐（老事件没有这两个字段）
+    contentLines: typeof toolCall.content_lines === 'number' ? toolCall.content_lines : undefined,
+    removedLines: typeof toolCall.removed_lines === 'number' ? toolCall.removed_lines : undefined,
   }
 }
 
@@ -197,7 +216,7 @@ const readExecutionTiming = (payload: unknown): Pick<ToolCallInfo, 'started_at_m
   return { started_at_ms: started, ended_at_ms: ended }
 }
 
-// 子智能体过程快照：随 task 的 tool_result payload 持久化（后端盖在
+// 子智能体过程快照：随 subagent 的 tool_result payload 持久化（后端盖在
 // additional_kwargs.subagent_trail），历史回放时据此还原「子智能体内部逻辑」。
 // 逐条目校验，坏数据丢弃条目而不是整块丢弃。
 const normalizeSubagentTrail = (value: unknown): SubagentTrailItem[] | undefined => {
@@ -248,8 +267,8 @@ const normalizeSubagentTrail = (value: unknown): SubagentTrailItem[] | undefined
   return trail.length > 0 ? trail : undefined
 }
 
-// 子智能体上下文用量快照：随 task 的 tool_result payload 持久化（后端盖在
-// additional_kwargs.subagent_context_usage），历史回放时 task 卡片标题行还原用量徽标。
+// 子智能体上下文用量快照：随 subagent 的 tool_result payload 持久化（后端盖在
+// additional_kwargs.subagent_context_usage），历史回放时 subagent 卡片标题行还原用量徽标。
 const normalizeSubagentContextUsage = (value: unknown): SubagentContextUsage | undefined => {
   if (!value || typeof value !== 'object') return undefined
   const raw = value as Record<string, unknown>
@@ -280,7 +299,7 @@ const normalizeSubagentContextUsage = (value: unknown): SubagentContextUsage | u
   }
 }
 
-// 子图上下文压缩记录：随 task 的 tool_result payload 持久化，历史回放还原「已压缩 N 次」
+// 子图上下文压缩记录：随 subagent 的 tool_result payload 持久化，历史回放还原「已压缩 N 次」
 const normalizeSubagentCompactions = (value: unknown): SubagentCompaction[] | undefined => {
   if (!Array.isArray(value)) return undefined
   const records: SubagentCompaction[] = []
@@ -312,7 +331,7 @@ const normalizeSubagentTokenUsageDetail = (value: unknown): ChatDataTokenUsage |
   return Number.isFinite(Number(usage.used)) && Number.isFinite(Number(usage.total)) ? usage : undefined
 }
 
-// 子智能体 token 用量（billing 口径）：随 task 的 tool_result payload 持久化，历史回放还原
+// 子智能体 token 用量（billing 口径）：随 subagent 的 tool_result payload 持久化，历史回放还原
 const normalizeSubagentTokenUsage = (value: unknown): SubagentTokenUsage | undefined => {
   if (!value || typeof value !== 'object') return undefined
   const raw = value as Record<string, unknown>
@@ -321,14 +340,22 @@ const normalizeSubagentTokenUsage = (value: unknown): SubagentTokenUsage | undef
     return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : undefined
   }
   const usage: SubagentTokenUsage = {
+    model: typeof raw.model === 'string' && raw.model.trim() ? raw.model.trim() : undefined,
     input_tokens: toNonNegativeInt(raw.input_tokens),
     output_tokens: toNonNegativeInt(raw.output_tokens),
     total_tokens: toNonNegativeInt(raw.total_tokens),
     cache_read_input_tokens: toNonNegativeInt(raw.cache_read_input_tokens),
     cache_creation_input_tokens: toNonNegativeInt(raw.cache_creation_input_tokens),
     reasoning_tokens: toNonNegativeInt(raw.reasoning_tokens),
+    tokens_per_second: Number(raw.tokens_per_second) > 0 ? Number(raw.tokens_per_second) : undefined,
   }
   return Object.values(usage).some(item => item !== undefined) ? usage : undefined
+}
+
+/** 子智能体本次派发步数 / 递归上限：历史 payload 只接受正整数。 */
+const normalizeSubagentStepCount = (value: unknown): number | undefined => {
+  const parsed = Math.floor(Number(value))
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
 }
 
 const withHistoryToolResult = (
@@ -340,6 +367,8 @@ const withHistoryToolResult = (
   subagentTokenUsage?: SubagentTokenUsage,
   subagentCompactions?: SubagentCompaction[],
   subagentTokenUsageDetail?: ChatDataTokenUsage,
+  subagentSupersteps?: number,
+  subagentRecursionLimit?: number,
 ): ToolCallInfo => {
   let renderId: string | undefined
   let renderType: ToolCallInfo['renderType']
@@ -370,6 +399,8 @@ const withHistoryToolResult = (
     subagentTokenUsage: subagentTokenUsage ?? toolCall.subagentTokenUsage,
     subagentCompactions: subagentCompactions ?? toolCall.subagentCompactions,
     subagentTokenUsageDetail: subagentTokenUsageDetail ?? toolCall.subagentTokenUsageDetail,
+    subagentSupersteps: subagentSupersteps ?? toolCall.subagentSupersteps,
+    subagentRecursionLimit: subagentRecursionLimit ?? toolCall.subagentRecursionLimit,
     started_at_ms: timing?.started_at_ms ?? toolCall.started_at_ms ?? null,
     ended_at_ms: timing?.ended_at_ms ?? toolCall.ended_at_ms ?? null,
   }
@@ -419,7 +450,12 @@ export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[
       activeAssistant = null
       const fileSelections = normalizeFileSelections(messagePayload.file_selections)
       const quotedSnippets = normalizeQuotedSnippets(messagePayload.quoted_snippets)
-      const userContent = stripHistoryUserContent(normalizeUserMessageContent(messagePayload.content))
+      const rawContent = normalizeUserMessageContent(messagePayload.content)
+      const structuredAnnotations = normalizeDocumentAnnotations(messagePayload.annotations)
+      const documentAnnotations = structuredAnnotations.length > 0
+        ? structuredAnnotations
+        : parseDocumentAnnotationBlocks(rawContent)
+      const userContent = stripHistoryUserContent(rawContent)
       displayMessages.push({
         id: String(messagePayload.id || `user-history-${index}`),
         role: 'user',
@@ -428,6 +464,7 @@ export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[
         timestamp: parseHistoryTimestamp(messagePayload.timestamp) || undefined,
         fileSelections: fileSelections.length > 0 ? fileSelections : undefined,
         quotedSnippets: quotedSnippets.length > 0 ? quotedSnippets : undefined,
+        documentAnnotations: documentAnnotations.length > 0 ? documentAnnotations : undefined,
       })
       continue
     }
@@ -461,8 +498,20 @@ export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[
       continue
     }
 
+    if (eventType === 'turn_error') {
+      const errorMessage = String(messagePayload.error || '').trim()
+      if (!errorMessage) continue
+      const assistant = ensureActiveAssistant(messagePayload, turnId)
+      assistant.error = errorMessage
+      assistant.isStreaming = false
+      continue
+    }
+
     if (eventType === 'assistant_message') {
       const assistant = ensureActiveAssistant(messagePayload, turnId)
+      // 同一轮重试成功后，后续助手消息清除旧失败标记；若本次仍失败，
+      // 新的 turn_error 会在其后重新写入。
+      assistant.error = undefined
       assistant.timestamp = parseHistoryTimestamp(messagePayload.timestamp) || assistant.timestamp
       // 生成统计随 assistant_message 持久化（服务端口径），与本轮直播口径同源
       const generationStats = toGenerationStats(messagePayload.generation_stats)
@@ -500,9 +549,11 @@ export const buildHistoryMessagesFromEvents = (historyEvents: unknown): Message[
     const subagentTokenUsage = normalizeSubagentTokenUsage(messagePayload.subagent_token_usage)
     const subagentCompactions = normalizeSubagentCompactions(messagePayload.subagent_compactions)
     const subagentTokenUsageDetail = normalizeSubagentTokenUsageDetail(messagePayload.subagent_token_usage_detail)
+    const subagentSupersteps = normalizeSubagentStepCount(messagePayload.subagent_supersteps)
+    const subagentRecursionLimit = normalizeSubagentStepCount(messagePayload.subagent_recursion_limit)
     target.toolCalls = target.toolCalls.map(toolCall => (
       toolCall.tool_call_id === toolCallId
-        ? withHistoryToolResult(toolCall, result, subagentTrail, timing, subagentContextUsage, subagentTokenUsage, subagentCompactions, subagentTokenUsageDetail)
+        ? withHistoryToolResult(toolCall, result, subagentTrail, timing, subagentContextUsage, subagentTokenUsage, subagentCompactions, subagentTokenUsageDetail, subagentSupersteps, subagentRecursionLimit)
         : toolCall
     ))
   }
@@ -580,13 +631,19 @@ export const buildHistoryMessages = (
       activeAssistant = null
       const fileSelections = normalizeFileSelections(rawMessage.file_selections)
       const quotedSnippets = normalizeQuotedSnippets(rawMessage.quoted_snippets)
+      const rawContent = String(rawMessage.content || '').trim()
+      const structuredAnnotations = normalizeDocumentAnnotations(rawMessage.annotations)
+      const documentAnnotations = structuredAnnotations.length > 0
+        ? structuredAnnotations
+        : parseDocumentAnnotationBlocks(rawContent)
       displayMessages.push({
         id: String(rawMessage.id || `user-history-${displayMessages.length}`),
         role: 'user',
-        content: stripHistoryUserContent(String(rawMessage.content || '').trim()),
+        content: stripHistoryUserContent(rawContent),
         timestamp: parseHistoryTimestamp(rawMessage.timestamp) || undefined,
         fileSelections: fileSelections.length > 0 ? fileSelections : undefined,
         quotedSnippets: quotedSnippets.length > 0 ? quotedSnippets : undefined,
+        documentAnnotations: documentAnnotations.length > 0 ? documentAnnotations : undefined,
       })
       continue
     }
@@ -631,9 +688,11 @@ export const buildHistoryMessages = (
     const subagentTokenUsage = normalizeSubagentTokenUsage(rawMessage.subagent_token_usage)
     const subagentCompactions = normalizeSubagentCompactions(rawMessage.subagent_compactions)
     const subagentTokenUsageDetail = normalizeSubagentTokenUsageDetail(rawMessage.subagent_token_usage_detail)
+    const subagentSupersteps = normalizeSubagentStepCount(rawMessage.subagent_supersteps)
+    const subagentRecursionLimit = normalizeSubagentStepCount(rawMessage.subagent_recursion_limit)
     target.toolCalls = target.toolCalls.map(toolCall => (
       toolCall.tool_call_id === toolCallId
-        ? withHistoryToolResult(toolCall, result, subagentTrail, timing, subagentContextUsage, subagentTokenUsage, subagentCompactions, subagentTokenUsageDetail)
+        ? withHistoryToolResult(toolCall, result, subagentTrail, timing, subagentContextUsage, subagentTokenUsage, subagentCompactions, subagentTokenUsageDetail, subagentSupersteps, subagentRecursionLimit)
         : toolCall
     ))
   }
@@ -668,32 +727,29 @@ const normalizeQuotedSnippets = (value: unknown): Array<{ id: string; text: stri
   return snippets.slice(0, 5)
 }
 
-// 历史用户消息正文里的服务端注入短句不重复展示，引用改由 chip 呈现：
-// 现行为 [引用文件：...]；历史存量还有 [本轮指定语义模型：...]（通道已废弃，仅剥文本）。
-// m 多行锚定：排队消息的正文顺序是 mention + quote 块 + attachment 占位行，
-// 剥掉 quote 块后 mention 短句后面仍跟 [attachment] 行，纯字符串 $ 锚定会失配漏剥
-const MENTION_SUFFIX_RES = [
-  /\s*\[引用文件：[^\]]*\]\s*$/gm,
-  /\s*\[本轮指定语义模型：[^\]]*\]\s*$/gm,
-]
-const stripMentionSuffix = (content: string): string =>
-  MENTION_SUFFIX_RES.reduce((text, regex) => text.replace(regex, ''), content).trimEnd()
+const normalizeDocumentAnnotations = (value: unknown): NonNullable<Message['documentAnnotations']> => {
+  if (!Array.isArray(value)) return []
+  const annotations: NonNullable<Message['documentAnnotations']> = []
+  for (const item of value) {
+    const raw = (item || {}) as Record<string, unknown>
+    const filePath = String(raw.file_path || '').trim()
+    const docPath = String(raw.doc_path || '').trim()
+    const comment = String(raw.comment || '').trim()
+    if (!filePath || !docPath) continue
+    annotations.push({
+      id: `doc-annotation-${annotations.length}`,
+      filePath,
+      docPath,
+      quote: String(raw.quote || '').trim(),
+      comment,
+    })
+  }
+  return annotations.slice(0, 5)
+}
 
-// 划选引用的模型可见标记块（后端追加）不在气泡重复平铺，引用原文由 chip 呈现；
-// 块内为多行原文，用成对标记非贪婪剥离，残余孤立标记一并清理
-const QUOTE_BLOCK_RES = [
-  /\s*\[引用助手回复片段开始\][\s\S]*?\[引用助手回复片段结束\]/g,
-  /^\s*\[引用助手回复片段(?:开始|结束)\]\s*$/gm,
-]
-const stripQuoteBlocks = (content: string): string =>
-  QUOTE_BLOCK_RES.reduce((text, regex) => text.replace(regex, '\n'), content)
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
-
-// 历史用户消息展示正文：先剥划选引用标记块（位于 mention 短句之后，必须先剥，
-// 否则 mention 后缀的行尾锚定失配），再剥引用短句
+// 历史加载与气泡渲染共用同一套注入内容剥离口径；保留导出供测试与旧调用方使用。
 export const stripHistoryUserContent = (content: string): string =>
-  stripMentionSuffix(stripQuoteBlocks(content))
+  stripUserMessageInternalSuffixes(content)
 
 interface UseConversationHistoryOptions {
   conversationId: Ref<string | null | undefined>
@@ -704,12 +760,14 @@ interface UseConversationHistoryOptions {
     status: string
     turn_id?: string | null
     is_continuation?: boolean
+    model_id?: string | null
+    stream_started_wall_ms?: number | null
     history_checkpoint?: { run_id?: string; stream_id?: string } | null
   } | null) => void
 }
 
-/** 历史事件单页条数：长会话全量拉取的字节量随会话线性增长，是加载变慢的主因 */
-export const HISTORY_PAGE_SIZE = 30
+/** 历史每页的完整轮次数：分页必须按 turn_id，不能按事件条数切轮 */
+export const HISTORY_TURN_PAGE_SIZE = 5
 
 /** 读取窗口内最小 sequence_no，作为向上翻页的游标；无法解析时返回 null */
 const readEarliestSequenceNo = (events: unknown[]): number | null => {
@@ -736,6 +794,10 @@ export function useConversationHistory({
   const historyEvents = ref<unknown[]>([])
   const hasMoreHistory = ref(false)
   const isLoadingEarlierHistory = ref(false)
+  // 当前窗口之前已有多少轮：轮次导航显示真实序号，不按已加载窗口从 1 重新编号
+  const turnOffset = ref(0)
+  // 按轮次接口返回的最早轮次游标；不能直接用事件最小 sequence（会被并发长轮次骗过）
+  const earliestTurnSequence = ref<number | null>(null)
 
   const applyHistoryEvents = (events: unknown[]) => {
     historyEvents.value = events
@@ -759,7 +821,7 @@ export function useConversationHistory({
     const showLoading = !force || messages.value.length === 0
     if (showLoading) isLoadingHistory.value = true
     try {
-      const response = await getConversationHistory(convId, { limit: HISTORY_PAGE_SIZE, strictLimit: true })
+      const response = await getConversationHistory(convId, { limitTurns: HISTORY_TURN_PAGE_SIZE })
 
       if (response.ok) {
         const data = await response.json()
@@ -777,7 +839,10 @@ export function useConversationHistory({
           messages.value = buildHistoryMessages(historyMessages, historyReasoningSegments)
           isFirstMessage.value = messages.value.length === 0
         }
-        hasMoreHistory.value = Boolean(data.data?.has_more)
+        hasMoreHistory.value = Boolean(data.data?.has_more_turns ?? data.data?.has_more)
+        turnOffset.value = Math.max(Number(data.data?.turn_offset) || 0, 0)
+        const nextCursor = Number(data.data?.earliest_turn_sequence)
+        earliestTurnSequence.value = Number.isFinite(nextCursor) ? nextCursor : null
       }
       loadedConversationId.value = convId
     } catch (error) {
@@ -787,41 +852,87 @@ export function useConversationHistory({
     }
   }
 
-  // 向上翻页：拉取比当前窗口更早的一页，拼回序列后重建消息
-  const loadEarlierHistory = async () => {
-    const convId = conversationId.value
-    if (!convId || isLoadingEarlierHistory.value || !hasMoreHistory.value) return
-    const cursor = readEarliestSequenceNo(historyEvents.value)
-    if (cursor === null) {
-      // 拿不到游标说明历史结构异常，停止翻页避免死循环
-      hasMoreHistory.value = false
-      return
-    }
-    isLoadingEarlierHistory.value = true
-    try {
-      const response = await getConversationHistory(convId, {
-        limit: HISTORY_PAGE_SIZE,
-        beforeSequence: cursor,
-        strictLimit: true,
-      })
-      // 会话可能已在请求期间切换：只应用属于当前会话的响应，避免旧会话事件污染新会话
-      if (!response.ok || conversationId.value !== convId) return
-      const data = await response.json()
-      const olderEvents = Array.isArray(data.data?.history_events) ? data.data.history_events : []
-      hasMoreHistory.value = Boolean(data.data?.has_more)
-      if (olderEvents.length === 0) return
-      historyEvents.value = [...olderEvents, ...historyEvents.value]
-      // 前拼而不是整表重建：messages 里还有历史窗口之外的本会话实时消息
-      // （已发送未落库的提问、流式进行中的回答），applyHistoryEvents 全量重建会把它们抹掉。
-      // 后端保证每页是一段连续的 sequence_no 区间、且以轮次起点收尾，
-      // 所以「旧页单独构建 + 前拼」与「整段重建」等价，不会漏事件也不会切断轮次。
-      messages.value = [...buildHistoryMessagesFromEvents(olderEvents), ...messages.value]
-      isFirstMessage.value = messages.value.length === 0
-    } catch (error) {
-      console.error('加载更早的历史消息失败:', error)
-    } finally {
-      isLoadingEarlierHistory.value = false
-    }
+  /**
+   * 向上翻页：拉取比当前窗口更早的一页，拼回序列后重建消息列表。
+   * 返回三态：'loaded'=拉到新页/正常到底；'failed'=网络失败或响应异常；
+   * 'skipped'=并发跳过或会话切换中断（非失败，不应向用户报错）。
+   * 回放预拉按三态处置（failed 报错取消、skipped 静默取消、loaded 续拉）；
+   * hasMoreHistory 不因失败翻转，若不中止会空转到翻页护栏；
+   * 滚顶/按钮等正常对话入口忽略返回值，行为不变。
+   *
+   * 并发合流：滚顶自动加载与回放预拉同时触发时，后到方复用在途请求等待结果，
+   * 而非立即跳过误报失败（同一时刻至多一个在途翻页请求）。
+   */
+  let earlierLoadTask: Promise<'loaded' | 'failed' | 'skipped'> | null = null
+  const loadEarlierHistory = (): Promise<'loaded' | 'failed' | 'skipped'> => {
+    if (earlierLoadTask) return earlierLoadTask
+    earlierLoadTask = (async () => {
+      try {
+        const convId = conversationId.value
+        if (!convId || !hasMoreHistory.value) return 'skipped'
+        const cursor = earliestTurnSequence.value ?? readEarliestSequenceNo(historyEvents.value)
+        if (cursor === null) {
+          // 拿不到游标说明历史结构异常，停止翻页避免死循环
+          hasMoreHistory.value = false
+          return 'loaded'
+        }
+        isLoadingEarlierHistory.value = true
+        try {
+          const response = await getConversationHistory(convId, {
+            limitTurns: HISTORY_TURN_PAGE_SIZE,
+            beforeTurnSequence: cursor,
+          })
+          if (!response.ok) return 'failed'
+          // 会话可能已在请求期间切换：只应用属于当前会话的响应，避免旧会话事件污染新会话
+          if (conversationId.value !== convId) return 'skipped'
+          const data = await response.json()
+          const olderEvents = Array.isArray(data.data?.history_events) ? data.data.history_events : []
+          hasMoreHistory.value = Boolean(data.data?.has_more_turns ?? data.data?.has_more)
+          // 后端按页返回窗口前的轮次数；旧后端没有该字段时按本页轮次数回退扣减
+          const responseOffset = Number(data.data?.turn_offset)
+          if (Number.isFinite(responseOffset)) {
+            turnOffset.value = Math.max(responseOffset, 0)
+          } else {
+            const olderTurnIds = new Set(
+              (olderEvents as Array<{ turn_id?: unknown } | null | undefined>)
+                .map(item => String(item?.turn_id || '').trim())
+                .filter(Boolean),
+            )
+            turnOffset.value = Math.max(turnOffset.value - olderTurnIds.size, 0)
+          }
+          const nextCursor = Number(data.data?.earliest_turn_sequence)
+          earliestTurnSequence.value = Number.isFinite(nextCursor) ? nextCursor : null
+          if (olderEvents.length === 0) return 'loaded'
+          const allEvents = [...olderEvents, ...historyEvents.value]
+          historyEvents.value = allEvents
+          // 即使后端已按轮次分页，合并窗口后仍统一重建，避免实时消息/历史窗口拼接
+          // 产生重复 assistant 块；新分页保证同一轮不会跨页。
+          const persistedIds = new Set<string>()
+          for (const raw of allEvents) {
+            if (!raw || typeof raw !== 'object') continue
+            const payload = (raw as { payload?: unknown }).payload
+            if (payload && typeof payload === 'object') {
+              const id = String((payload as { id?: unknown }).id || '').trim()
+              if (id) persistedIds.add(id)
+            }
+          }
+          // 本会话实时消息（已发送未落库、流式进行中）不在历史事件里，重建后追加保留。
+          const liveMessages = messages.value.filter(item => item.isStreaming || !persistedIds.has(item.id))
+          const rebuiltHistory = buildHistoryMessagesFromEvents(allEvents)
+          messages.value = [...rebuiltHistory, ...liveMessages]
+          isFirstMessage.value = messages.value.length === 0
+          return 'loaded'
+        } catch (error) {
+          console.error('加载更早的历史消息失败:', error)
+          return 'failed'
+        } finally {
+          isLoadingEarlierHistory.value = false
+        }
+      } finally {
+        earlierLoadTask = null
+      }
+    })()
+    return earlierLoadTask
   }
 
   // 监听 conversationId 变化
@@ -848,6 +959,8 @@ export function useConversationHistory({
     isFirstMessage.value = true
     historyEvents.value = []
     hasMoreHistory.value = false
+    earliestTurnSequence.value = null
+    turnOffset.value = 0
   }
 
   return {
@@ -859,6 +972,7 @@ export function useConversationHistory({
     hasMoreHistory,
     isLoadingEarlierHistory,
     loadEarlierHistory,
+    turnOffset,
   }
 }
 
@@ -867,6 +981,8 @@ const normalizeActiveRun = (value: unknown): {
   status: string
   turn_id?: string | null
   is_continuation?: boolean
+  model_id?: string | null
+  stream_started_wall_ms?: number | null
   history_checkpoint?: { run_id?: string; stream_id?: string } | null
 } | null => {
   if (!value || typeof value !== 'object') return null
@@ -884,6 +1000,10 @@ const normalizeActiveRun = (value: unknown): {
     status,
     turn_id: String(raw.turn_id || '').trim() || null,
     is_continuation: raw.is_continuation === true,
+    model_id: String(raw.model_id || '').trim() || null,
+    stream_started_wall_ms: Number.isFinite(Number(raw.stream_started_wall_ms)) && Number(raw.stream_started_wall_ms) > 0
+      ? Number(raw.stream_started_wall_ms)
+      : null,
     history_checkpoint: streamId
       ? { run_id: String(checkpoint?.run_id || runId), stream_id: streamId }
       : null,

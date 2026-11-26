@@ -12,7 +12,7 @@ def test_defaults_are_local_without_bash():
     options = ro.AgentRuntimeOptions()
     assert options.workspace_backend == "local"
     assert options.explore_subagent_enabled is False
-    assert options.plan_subagent_enabled is False
+    assert options.general_subagent_enabled is False
 
 
 def test_post_init_falls_back_to_local_for_invalid_backend():
@@ -23,26 +23,26 @@ def test_post_init_falls_back_to_local_for_invalid_backend():
 def test_get_default_runtime_options_reads_runtime_config(monkeypatch):
     monkeypatch.setattr(rc, "CHAT_DATA_DEFAULT_WORKSPACE_BACKEND", "sandbox")
     monkeypatch.setattr(rc, "CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED", True)
-    monkeypatch.setattr(rc, "CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED", True)
+    monkeypatch.setattr(rc, "CHAT_DATA_DEFAULT_GENERAL_SUBAGENT_ENABLED", True)
 
     options = ro.get_chat_data_default_runtime_options()
     assert options.workspace_backend == "sandbox"
     assert options.explore_subagent_enabled is True
-    assert options.plan_subagent_enabled is True
+    assert options.general_subagent_enabled is True
 
 
 def test_resolve_applies_hot_subagent_defaults(monkeypatch):
     """async 调用方经 get_runtime_setting 解析的子智能体开关经参数透传为默认值。"""
     monkeypatch.setattr(rc, "CHAT_DATA_DEFAULT_WORKSPACE_BACKEND", "local")
     monkeypatch.setattr(rc, "CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED", False)
-    monkeypatch.setattr(rc, "CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED", False)
+    monkeypatch.setattr(rc, "CHAT_DATA_DEFAULT_GENERAL_SUBAGENT_ENABLED", False)
 
     options = ro.resolve_agent_runtime_options(
         explore_subagent_enabled=True,
-        plan_subagent_enabled=True,
+        general_subagent_enabled=True,
     )
     assert options.explore_subagent_enabled is True
-    assert options.plan_subagent_enabled is True
+    assert options.general_subagent_enabled is True
 
 
 @pytest.mark.asyncio
@@ -51,13 +51,13 @@ async def test_get_subagent_hot_defaults_maps_settings_to_kwargs(monkeypatch):
     from apps.chat_data_app.services import setting_service as ss
 
     async def fake_setting(key: str) -> bool:
-        return key == "CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED"
+        return key == "CHAT_DATA_DEFAULT_GENERAL_SUBAGENT_ENABLED"
 
     monkeypatch.setattr(ss, "get_runtime_setting", fake_setting)
     hot = await ro.get_subagent_hot_defaults()
     assert hot == {
         "explore_subagent_enabled": False,
-        "plan_subagent_enabled": True,
+        "general_subagent_enabled": True,
     }
 
 

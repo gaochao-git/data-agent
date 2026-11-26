@@ -152,6 +152,68 @@ async def test_event_history_is_ordered_and_idempotent_across_turns(conversation
 
 
 @pytest.mark.asyncio
+async def test_turn_error_is_persisted_after_messages_and_is_idempotent(conversation_event_service):
+    """失败提示进历史事件、排在已产生消息之后，同一轮重复收口只保留一条。"""
+    service, create_thread, _get_session = conversation_event_service
+    await create_thread("conv-error", "user-1")
+
+    user_message = HumanMessage(
+        content="分析订单", id="turn-error", additional_kwargs={"timestamp": "2026-11-21 10:00:00"}
+    )
+    await service.persist_user_message(
+        conversation_id="conv-error",
+        user_id="user-1",
+        operator_name="用户一",
+        message=user_message,
+    )
+    await service.persist_turn(
+        conversation_id="conv-error",
+        user_id="user-1",
+        operator_name="用户一",
+        turn_id="turn-error",
+        messages=[user_message, AIMessage(content="已查询部分订单", id="assistant-error")],
+        reasoning_segments=[],
+    )
+    error_payload = {
+        "error": "本轮执行已达到 7 步上限，任务被中止。",
+        "error_type": "GraphRecursionError",
+        "supersteps": 7,
+        "recursion_limit": 7,
+    }
+    for _ in range(2):
+        await service.persist_turn_error(
+            conversation_id="conv-error",
+            user_id="user-1",
+            operator_name="用户一",
+            turn_id="turn-error",
+            run_id="run-1",
+            **error_payload,
+        )
+    await service.persist_turn_error(
+        conversation_id="conv-error",
+        user_id="user-1",
+        operator_name="用户一",
+        turn_id="turn-error",
+        run_id="run-2",
+        **error_payload,
+    )
+
+    history = await service.load_history_with_recovery(conversation_id="conv-error", user_id="user-1")
+
+    error_events = [event for event in history["history_events"] if event["event_type"] == "turn_error"]
+    # 同一 Run 重复收口仍只有一条；重试是新 Run，追加在后。
+    assert len(error_events) == 2
+    assert history["history_events"][-1]["event_type"] == "turn_error"
+    persisted_payload = error_events[0]["payload"]
+    assert persisted_payload["error"] == error_payload["error"]
+    assert persisted_payload["error_type"] == error_payload["error_type"]
+    assert persisted_payload["supersteps"] == error_payload["supersteps"]
+    assert persisted_payload["recursion_limit"] == error_payload["recursion_limit"]
+    assert persisted_payload["timestamp"]
+    assert [message["content"] for message in history["messages"]] == ["分析订单", "已查询部分订单"]
+
+
+@pytest.mark.asyncio
 async def test_persist_user_message_touches_thread_update_time_but_turn_does_not(conversation_event_service):
     """用户提问刷新会话行 update_time（侧栏「最近更新」排序依据），助手轮次不刷新。"""
     service, create_thread, get_session = conversation_event_service
@@ -539,6 +601,7 @@ async def test_history_recovery_returns_only_valid_checkpoint_for_active_run(con
         "run-recovery",
         {
             "turn_id": "turn-recovery",
+            "stream_started_wall_ms": 1787629922000,
             "history_checkpoint": {
                 "run_id": "run-recovery",
                 "turn_id": "turn-recovery",
@@ -554,6 +617,7 @@ async def test_history_recovery_returns_only_valid_checkpoint_for_active_run(con
     )
 
     assert history["active_run"]["run_id"] == "run-recovery"
+    assert history["active_run"]["stream_started_wall_ms"] == 1787629922000
     assert history["active_run"]["history_checkpoint"]["stream_id"] == "1787629922140-7"
 
     await _update_run_content(
@@ -824,7 +888,7 @@ def test_human_message_payload_strips_blocks_and_carries_vision_attachments():
 
 
 def test_tool_message_payload_carries_subagent_trail_snapshot():
-    """task 工具的子智能体过程快照随 tool_result 事件持久化（历史回放还原用）。"""
+    """subagent 工具的子智能体过程快照随 tool_result 事件持久化（历史回放还原用）。"""
     from apps.chat_data_app.agent.run.conversation_event_service import (
         _serialize_tool_message,
     )
@@ -851,12 +915,12 @@ def test_tool_message_payload_carries_subagent_trail_snapshot():
         ToolMessage(
             content="1 + 1 = 2",
             tool_call_id="call-task-1",
-            name="task",
+            name="subagent",
             additional_kwargs={"subagent_trail": trail},
         )
     )
     assert payload["subagent_trail"] == trail
-    assert payload["tool_name"] == "task"
+    assert payload["tool_name"] == "subagent"
 
     # 无快照（普通工具 / 空快照）不出现该字段
     plain = _serialize_tool_message(ToolMessage(content="结果", tool_call_id="call-2", name="calculator_tool"))
@@ -865,7 +929,7 @@ def test_tool_message_payload_carries_subagent_trail_snapshot():
         ToolMessage(
             content="结论",
             tool_call_id="call-3",
-            name="task",
+            name="subagent",
             additional_kwargs={"subagent_trail": []},
         )
     )
@@ -873,7 +937,7 @@ def test_tool_message_payload_carries_subagent_trail_snapshot():
 
 
 def test_tool_message_payload_carries_subagent_context_usage():
-    """task 工具的上下文用量快照随 tool_result 事件持久化（历史回放还原徽标用）。"""
+    """subagent 工具的上下文用量快照随 tool_result 事件持久化（历史回放还原徽标用）。"""
     from apps.chat_data_app.agent.run.conversation_event_service import (
         _serialize_tool_message,
     )
@@ -883,7 +947,7 @@ def test_tool_message_payload_carries_subagent_context_usage():
         ToolMessage(
             content="盘点结论",
             tool_call_id="call-task-1",
-            name="task",
+            name="subagent",
             additional_kwargs={"subagent_context_usage": usage},
         )
     )
@@ -896,7 +960,7 @@ def test_tool_message_payload_carries_subagent_context_usage():
         ToolMessage(
             content="结论",
             tool_call_id="call-3",
-            name="task",
+            name="subagent",
             additional_kwargs={"subagent_context_usage": "not-a-dict"},
         )
     )
@@ -1059,38 +1123,111 @@ async def test_history_window_finishes_single_turn_longer_than_limit(conversatio
 
 
 @pytest.mark.asyncio
-async def test_history_window_strict_limit_keeps_tail_without_expanding_long_turn(conversation_event_service):
-    """strict_limit 对超长轮次只返回尾页，避免 limit 被轮次闭包放大成整轮。"""
+async def test_history_turn_window_returns_complete_turns_only(conversation_event_service):
+    """按轮次分页：每页完整返回 turn_id 的所有事件，不按事件条数截断。"""
     service, create_thread, _get_session = conversation_event_service
-    await create_thread("conv-strict", "user-1")
+    await create_thread("conv-turn-page", "user-1")
+    for index in range(1, 5):
+        await _persist_qa_turn(
+            service,
+            conversation_id="conv-turn-page",
+            turn_id=f"turn-{index}",
+            question=f"问题{index}",
+            answer=f"回答{index}",
+        )
+
+    first = await service.load_history_with_recovery(
+        conversation_id="conv-turn-page",
+        user_id="user-1",
+        limit_turns=2,
+    )
+    assert [event["payload"]["content"] for event in first["history_events"]] == ["问题3", "回答3", "问题4", "回答4"]
+    assert {event["turn_id"] for event in first["history_events"]} == {"turn-3", "turn-4"}
+    assert first["has_more_turns"] is True
+    assert first["earliest_turn_sequence"] == 6
+    # 尾部窗口之前已有 2 轮：导航要显示“第 3/4 次提问”，不能从 1 重新编号
+    assert first["turn_offset"] == 2
+
+    older = await service.load_history_with_recovery(
+        conversation_id="conv-turn-page",
+        user_id="user-1",
+        limit_turns=2,
+        before_turn_sequence=first["earliest_turn_sequence"],
+    )
+    assert [event["payload"]["content"] for event in older["history_events"]] == ["问题1", "回答1", "问题2", "回答2"]
+    assert older["has_more_turns"] is False
+    assert older["turn_offset"] == 0
+
+
+@pytest.mark.asyncio
+async def test_history_turn_offset_ignores_notification_only_turns(conversation_event_service):
+    """后台通知轮只有助手消息，不占轮次导航的“第 N 次提问”。"""
+    service, create_thread, _get_session = conversation_event_service
+    await create_thread("conv-turn-offset", "user-1")
     await _persist_qa_turn(
         service,
-        conversation_id="conv-strict",
+        conversation_id="conv-turn-offset",
         turn_id="turn-1",
+        question="问题1",
+        answer="回答1",
+    )
+    hidden_notice = HumanMessage(
+        content="后台任务通知",
+        id="hidden-notice",
+        additional_kwargs={"hide_from_ui": True},
+    )
+    await service.persist_turn(
+        conversation_id="conv-turn-offset",
+        user_id="user-1",
+        operator_name="用户一",
+        turn_id="turn-notice",
+        messages=[hidden_notice, AIMessage(content="后台任务简报", id="assistant-notice")],
+        reasoning_segments=[],
+    )
+    await _persist_qa_turn(
+        service,
+        conversation_id="conv-turn-offset",
+        turn_id="turn-2",
+        question="问题2",
+        answer="回答2",
+    )
+
+    page = await service.load_history_with_recovery(
+        conversation_id="conv-turn-offset",
+        user_id="user-1",
+        limit_turns=1,
+    )
+    assert {event["turn_id"] for event in page["history_events"]} == {"turn-2"}
+    assert page["turn_offset"] == 1
+
+
+@pytest.mark.asyncio
+async def test_history_turn_window_keeps_long_turn_complete(conversation_event_service):
+    """单轮事件数超过普通眼页大小也必须整轮返回，不能切断。"""
+    service, create_thread, _get_session = conversation_event_service
+    await create_thread("conv-turn-long", "user-1")
+    await _persist_qa_turn(
+        service,
+        conversation_id="conv-turn-long",
+        turn_id="turn-long",
         question="长轮次问题",
         answer="回答1",
         extra_answers=("回答2", "回答3", "回答4"),
     )
 
     page = await service.load_history_with_recovery(
-        conversation_id="conv-strict",
+        conversation_id="conv-turn-long",
         user_id="user-1",
-        limit=2,
-        strict_limit=True,
+        limit_turns=5,
     )
-    assert len(page["history_events"]) == 2
-    assert page["has_more"] is True
-    assert [event["payload"]["content"] for event in page["history_events"]] == ["回答3", "回答4"]
-
-    older = await service.load_history_with_recovery(
-        conversation_id="conv-strict",
-        user_id="user-1",
-        limit=2,
-        before_sequence=page["earliest_sequence_no"],
-        strict_limit=True,
-    )
-    assert len(older["history_events"]) == 2
-    assert older["has_more"] is True
+    assert [event["payload"]["content"] for event in page["history_events"]] == [
+        "长轮次问题",
+        "回答1",
+        "回答2",
+        "回答3",
+        "回答4",
+    ]
+    assert page["has_more_turns"] is False
 
 
 @pytest.mark.asyncio
@@ -1423,6 +1560,20 @@ async def test_persist_turn_skips_empty_messages(conversation_event_service):
         messages=[],
         reasoning_segments=[],
     )
+    # 注释声称「不触库」，由真实 DB 查询验证：该会话下不应产生任何事件行
+    async with _get_session() as session:
+        rows = (
+            (
+                await session.execute(
+                    select(ChatDataConversationEvent).where(
+                        ChatDataConversationEvent.conversation_id == "conv-empty-turn"
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert rows == []
 
 
 @pytest.mark.asyncio

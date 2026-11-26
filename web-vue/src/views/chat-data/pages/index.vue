@@ -3,7 +3,7 @@
  * ChatData 智能问数主页面
  * 参考 React 版本布局，支持数据智能体、可视化查询、SQL查询、数据看板、指标集配置
  */
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
@@ -17,7 +17,7 @@ import '../styles/scrollbars.css'
 // 「工作中」九宫格像素动画（流式状态行指示器，定义见文件头注释）
 import '../styles/loading-pixel.css'
 import useUserStore from '@/store/modules/user'
-import { getDatasources, createConversation, generateConversationTitle, getConversationContext, getSemanticConfigs, getMySemanticConfigs, createSemanticConfig, getDatasourceSchema } from '../api'
+import { getDatasources, createConversation, getConversationContext, getSemanticConfigs, getMySemanticConfigs, createSemanticConfig, getDatasourceSchema } from '../api'
 import { listDashboards, type Dashboard } from '../api/dashboard'
 import type { BuilderDragFieldData, DataSource, ViewMode, ChatDataOptions, SemanticConfigItem, SemanticYamlFile, ExecutionTargetOption, TableInfo } from '../types'
 import { normalizeTableInfoList, resolveDatasourceType } from '../utils/datasourceSchema'
@@ -476,18 +476,17 @@ const currentConversationTitle = ref<string>('新会话')
 const currentConversationDatasourceId = ref<string | null>(null)
 const conversationPageSize = 20
 const conversationKey = ref(0)
-// 模型选择跟随当前浏览器标签页（对话窗口）：刷新/路由切换/新建任务后都保持；
-// 只有模型从注册表移除时才由 Conversation 的 modelOptions watcher 回填默认模型。
-// 用 sessionStorage 而非 localStorage，避免新开标签页或下次打开系统时继承上一次的临时选择。
+// 新会话优先沿用用户在当前标签页最后一次手选的模型；没有缓存才由对话组件
+// 回填注册表默认模型。只记录用户手选，历史会话/运行中回填的模型不写入缓存。
 const SELECTED_MODEL_SESSION_KEY = 'chatdata.current_window_model_id'
-const readWindowSelectedModel = (): string => {
+const readCachedModelId = (): string => {
   try {
     return sessionStorage.getItem(SELECTED_MODEL_SESSION_KEY) || ''
   } catch {
     return ''
   }
 }
-const rememberWindowSelectedModel = (value: string) => {
+const rememberCachedModelId = (value: string) => {
   try {
     if (value) sessionStorage.setItem(SELECTED_MODEL_SESSION_KEY, value)
     else sessionStorage.removeItem(SELECTED_MODEL_SESSION_KEY)
@@ -495,10 +494,9 @@ const rememberWindowSelectedModel = (value: string) => {
     // storage 被宿主禁用时只丢失记忆，不影响功能
   }
 }
-const selectedConversationModelId = ref(readWindowSelectedModel())
-watch(selectedConversationModelId, (value) => {
-  rememberWindowSelectedModel(value || '')
-})
+const selectedConversationModelId = ref(readCachedModelId())
+// 会话切换令牌：快速连点/切会话后再新建时，晚返回的旧 context 不得覆盖最后操作。
+let conversationSelectionSeq = 0
 
 // SqlEditor 组件引用
 const sqlEditorRef = ref<InstanceType<typeof SqlEditor> | null>(null)
@@ -507,6 +505,8 @@ const conversationRef = ref<InstanceType<typeof Conversation> | null>(null)
 // 右侧栏可见性：由 Conversation 广播（面板内的 ✕ 也会触发），
 // 右上角开关按钮的图标与提示都读它，不自己另存状态。
 const conversationConsoleVisible = ref(false)
+// 运行中子智能体数量：同样由 Conversation 广播，收起侧栏时在开关按钮上显示角标。
+const conversationSubagentActiveCount = ref(0)
 
 const toggleConversationConsole = () => {
   conversationRef.value?.toggleConsolePanel()
@@ -620,10 +620,12 @@ const {
   isLoadingMoreConversations,
   hasMoreConversations,
   ensureConversationsLoaded,
+  refreshConversationsPreservingPages,
   loadMoreConversations,
   loadMoreConversationGroup,
   updateConversationTitle: updateHistoryConversationTitle,
   updateConversationRunStatus: updateHistoryConversationRunStatus,
+  markConversationRead: markHistoryConversationRead,
   upsertConversation: upsertHistoryConversation,
   refreshAfterFavorite,
   invalidateInactiveView,
@@ -633,6 +635,7 @@ const {
   viewMode: conversationViewMode,
   datasources: allDatasources,
   sortBy: conversationSortBy,
+  currentUserId: computed(() => currentUser.value.id),
 })
 
 const setConversationViewMode = (mode: ConversationViewMode) => {
@@ -648,9 +651,9 @@ const setConversationSortBy = (sortBy: ConversationSortBy) => {
   writeLocalStorage(CONVERSATION_SORT_BY_KEY, sortBy)
 }
 
-// 手动刷新：强制重载当前视图首屏（ensureConversationsLoaded 内部保留旧数据展示，刷新期间不闪空态）
+// 手动刷新：强制重载当前视图并保留已展开的分页（刷新期间保留旧数据展示，不闪空态）
 const handleRefreshConversations = () => {
-  void ensureConversationsLoaded(true)
+  void refreshConversationsPreservingPages()
 }
 
 // 切换模式
@@ -667,27 +670,42 @@ watch(visibleModes, () => {
 
 // 新建会话（只清空状态；选数据源确认时创建会话，发送消息兜底创建）
 const handleNewConversation = () => {
+  conversationSelectionSeq++
   currentConversationId.value = null
   currentConversationTitle.value = '新会话'
   currentConversationDatasourceId.value = null
   conversationKey.value++ // 强制重新渲染以清空消息
-  // 模型注册表是模块级会话期缓存，后端改配置后本页不会自动感知，所以新建会话时
-  // 强制重拉 /config（后台静默）；但保留当前窗口已选模型，避免每次新建任务都静默
-  // 落回注册表默认模型（评测 OBS-01）。仅当该模型已从注册表移除时，由 Conversation
-  // 内的 watch(modelOptions) 回填默认模型。
+  // 模型注册表是模块级会话期缓存，后端改配置后本页不会自动感知；新建会话
+  // 时强制重拉 /config（后台静默）。新会话优先沿用当前标签页最后一次手选
+  // 的模型；无缓存时由 Conversation 内的 watch(modelOptions) 回填默认模型。
+  selectedConversationModelId.value = readCachedModelId()
   loadModelOptions(true)
 }
 
-const loadConversationDatasourceId = async (conversationId: string): Promise<string | null | undefined> => {
+const loadConversationContext = async (
+  conversationId: string,
+): Promise<{ datasourceId: string | null; modelId: string | null } | undefined> => {
   try {
     const response = await getConversationContext(conversationId)
     if (response.status !== 'success') {
       throw new Error(response.msg || '读取历史会话上下文失败')
     }
-    return String(response.data?.datasource_id || '').trim() || null
+    return {
+      datasourceId: String(response.data?.datasource_id || '').trim() || null,
+      modelId: String(response.data?.model_id || '').trim() || null,
+    }
   } catch (error) {
     console.error('读取历史会话上下文失败:', error)
     return undefined
+  }
+}
+
+// 运行中模型以服务端当前 Run 为准：本窗口、别的窗口或刷新恢复都不能停留在
+// 上一次的模型。只同步当前会话，异步返回后再校验一次，避免切会话竞态。
+const syncConversationModelFromContext = async (conversationId: string): Promise<void> => {
+  const context = await loadConversationContext(conversationId)
+  if (currentConversationId.value === conversationId && context?.modelId) {
+    selectedConversationModelId.value = context.modelId
   }
 }
 
@@ -695,11 +713,14 @@ const loadConversationDatasourceId = async (conversationId: string): Promise<str
 const selectConversation = async (id: string): Promise<boolean> => {
   const conv = conversations.value.find(c => c.id === id)
   if (!conv) return false
-  const conversationDatasourceId = await loadConversationDatasourceId(id)
-  if (conversationDatasourceId === undefined) {
+  const selectionSeq = ++conversationSelectionSeq
+  const context = await loadConversationContext(id)
+  if (selectionSeq !== conversationSelectionSeq) return false
+  if (context === undefined) {
     ElMessage.error('读取历史会话上下文失败')
     return false
   }
+  const conversationDatasourceId = context.datasourceId
   if (conversationDatasourceId) {
     if (!datasources.value.some(datasource => datasource.id === conversationDatasourceId)) {
       ElMessage.warning('该历史会话关联的数据源组已不可用，仅可查看历史内容')
@@ -710,8 +731,24 @@ const selectConversation = async (id: string): Promise<boolean> => {
   currentConversationId.value = id
   currentConversationTitle.value = conv?.title || '会话'
   currentConversationDatasourceId.value = conversationDatasourceId || null
+  // 历史会话显示最近一次实际使用的模型；新会话走手选缓存/默认模型。
+  // 运行中由后端 context 优先返回当前 Run 的模型，避免显示成上一次的模型。
+  selectedConversationModelId.value = context.modelId || ''
+  markHistoryConversationRead(id)
   conversationKey.value++ // 强制重新渲染以加载历史
   return true
+}
+
+// 侧栏「回放演示」入口：当前会话直接进入待启动；其他会话先切换（key 自增重挂载），
+// 重挂载后 requestReplay 会等历史加载完成再进入待启动（预填第一条提问），回车开演（Conversation 内 pendingAutoReplay）。
+const handleReplayConversation = async (conversationId: string) => {
+  if (conversationId === currentConversationId.value) {
+    conversationRef.value?.requestReplay()
+    return
+  }
+  await handleHistoryConversationSelect(conversationId)
+  await nextTick()
+  conversationRef.value?.requestReplay()
 }
 
 const ensureConversationDatasource = async (): Promise<boolean> => {
@@ -754,46 +791,26 @@ const handleUpdateConversationTitle = (conversationId: string, title: string) =>
   }
 }
 
-// 会话标题占位符：与后端 generate_title 的占位符集合保持一致。
-// 命名只成功写库一次；失败时后端不落降级标题（保持占位符），
-// 由下一轮 Run 终态再次触发，直到成功自停。
+// 后端异步生成标题后通过 Run SSE 推送；列表刷新是断线/迟到结果的兜底。
 const CONVERSATION_TITLE_PLACEHOLDERS = new Set(['', '新会话', '未命名会话'])
-const titleRetryInFlight = new Set<string>()
 
-const retryConversationTitleIfNeeded = async (conversationId: string) => {
-  if (titleRetryInFlight.has(conversationId)) return
-  const currentTitle = currentConversationId.value === conversationId
-    ? currentConversationTitle.value
-    : conversations.value.find(item => item.id === conversationId)?.title || ''
-  if (!CONVERSATION_TITLE_PLACEHOLDERS.has(currentTitle.trim())) return
-  titleRetryInFlight.add(conversationId)
-  try {
-    const res = await generateConversationTitle(conversationId, selectedConversationModelId.value || undefined)
-    if (res?.status === 'success' && res.data?.title) {
-      if (currentConversationId.value === conversationId) {
-        currentConversationTitle.value = res.data.title
-      }
-      updateHistoryConversationTitle(conversationId, res.data.title)
-      invalidateInactiveView()
-    }
-  } catch (error) {
-    // 失败保持占位符，等下一轮 Run 终态再试
-    console.error('重试生成会话标题失败:', error)
-  } finally {
-    titleRetryInFlight.delete(conversationId)
-  }
+const syncCurrentConversationTitleFromList = () => {
+  const conversationId = currentConversationId.value
+  if (!conversationId) return
+  const title = conversations.value.find(item => item.id === conversationId)?.title?.trim() || ''
+  if (title && !CONVERSATION_TITLE_PLACEHOLDERS.has(title)) currentConversationTitle.value = title
 }
 
 const handleConversationRunStatusChanged = (
   conversationId: string,
-  status: 'pending' | 'active' | 'cancelling' | 'waiting_user' | null,
+  status: 'pending' | 'active' | 'cancelling' | 'interrupting' | 'waiting_user' | null,
 ) => {
   updateHistoryConversationRunStatus(conversationId, status)
   if (status === null) {
+    // 当前会话用户正在查看终态，直接记本地已读；后台会话的绿点由列表轮询补上。
+    if (conversationId === currentConversationId.value) markHistoryConversationRead(conversationId)
     // 终态先更新当前缓存，随后以服务端列表覆盖，避免停止/完成后历史项仍显示旧的 cancelling 状态。
-    void ensureConversationsLoaded(true)
-    // 标题仍是占位符的会话借本轮终态重试命名（直到成功自停）
-    void retryConversationTitleIfNeeded(conversationId)
+    void refreshConversationsPreservingPages().then(syncCurrentConversationTitleFromList)
   }
 }
 
@@ -802,35 +819,84 @@ const handleToggleConversationFavorite = async (conversationId: string, isFavori
   await refreshAfterFavorite(conversationId, isFavorited)
 }
 
-// 首条消息对应的 SSE 建立后立即生成标题并完成分组迁移，不等待助手输出结束。
-const handleFirstMessageStarted = async (convId: string) => {
-  const datasourcePromise = loadConversationDatasourceId(convId)
-  const titlePromise = generateConversationTitle(convId, selectedConversationModelId.value || undefined)
-    .catch(error => {
-      console.error('生成标题失败:', error)
-      return null
-    })
-  const [boundDatasourceId, res] = await Promise.all([datasourcePromise, titlePromise])
+// 会话列表状态轮询：后台会话没有自己的 SSE 监听，由列表轮询发现完成终态并刷新绿点。
+const ACTIVE_CONVERSATION_RUN_STATUSES = new Set(['pending', 'active', 'cancelling', 'interrupting'])
+const hasActiveConversationRun = computed(() => conversations.value.some(item => (
+  item.run_status ? ACTIVE_CONVERSATION_RUN_STATUSES.has(item.run_status) : false
+)))
+let runStatusPollTimer: ReturnType<typeof setInterval> | null = null
+let runStatusPollInFlight = false
+let runStatusPollIntervalMs = 0
 
-  if (currentConversationId.value === convId && boundDatasourceId) {
-    currentConversationDatasourceId.value = boundDatasourceId
+const stopRunStatusPolling = () => {
+  if (runStatusPollTimer !== null) {
+    clearInterval(runStatusPollTimer)
+    runStatusPollTimer = null
   }
-  let generatedTitle = currentConversationTitle.value
-  if (res?.status === 'success' && res.data?.title) {
-    generatedTitle = res.data.title
-    if (currentConversationId.value === convId) currentConversationTitle.value = generatedTitle
-    updateHistoryConversationTitle(convId, generatedTitle)
-  }
+  runStatusPollIntervalMs = 0
+}
 
+const pollRunStatuses = async () => {
+  if (runStatusPollInFlight || document.hidden) return
+  runStatusPollInFlight = true
+  try {
+    await refreshConversationsPreservingPages()
+    syncCurrentConversationTitleFromList()
+    const currentId = currentConversationId.value
+    const currentRunStatus = conversations.value.find(item => item.id === currentId)?.run_status
+    if (
+      currentId
+      && currentRunStatus
+      && (ACTIVE_CONVERSATION_RUN_STATUSES.has(currentRunStatus) || currentRunStatus === 'waiting_user')
+    ) {
+      await syncConversationModelFromContext(currentId)
+    }
+  } finally {
+    runStatusPollInFlight = false
+  }
+}
+
+const startRunStatusPolling = (intervalMs: number) => {
+  if (runStatusPollTimer !== null && runStatusPollIntervalMs === intervalMs) return
+  stopRunStatusPolling()
+  runStatusPollIntervalMs = intervalMs
+  runStatusPollTimer = setInterval(() => { void pollRunStatuses() }, intervalMs)
+}
+
+watch(hasActiveConversationRun, (active) => {
+  // 有活跃 Run 时 5s 刷新；空闲时也保留 30s 低保真轮询，
+  // 否则别的窗口启动并完成的任务，本页永远发现不了。
+  startRunStatusPolling(active ? 5000 : 30000)
+}, { immediate: true })
+
+onBeforeUnmount(stopRunStatusPolling)
+
+// 首条消息的 SSE 建立后先落占位会话；标题由服务端异步生成，不阻塞侧边栏出现。
+const handleFirstMessageStarted = (convId: string) => {
+  const fallbackTitle = currentConversationTitle.value || '新会话'
   upsertHistoryConversation({
     id: convId,
-    title: generatedTitle,
-    ...(boundDatasourceId ? { datasource_id: boundDatasourceId } : {}),
+    title: fallbackTitle,
     updated_at: new Date().toISOString(),
   })
-  // 刷新会话列表
   invalidateInactiveView()
-  void ensureConversationsLoaded(true)
+  void loadConversationContext(convId).then(context => {
+    const boundDatasourceId = context?.datasourceId
+    if (currentConversationId.value === convId && boundDatasourceId) {
+      currentConversationDatasourceId.value = boundDatasourceId
+    }
+    if (currentConversationId.value === convId && context?.modelId) {
+      selectedConversationModelId.value = context.modelId
+    }
+    if (boundDatasourceId) {
+      upsertHistoryConversation({
+        id: convId,
+        datasource_id: boundDatasourceId,
+        updated_at: new Date().toISOString(),
+      })
+    }
+    void refreshConversationsPreservingPages().then(syncCurrentConversationTitleFromList)
+  })
 }
 
 // 数据源变更
@@ -1163,11 +1229,13 @@ const handleConfirmContextSelector = () => {
     if (isGroupSwitchNewTask.value) {
       // 换组 = 基于新组新建任务：重置会话态（已有会话保留在历史），新任务在
       // 首次使用会话工作区（发送首条消息 / 输入 @）时兜底创建；模型选择同
-      // 「新建任务」口径——保留当前窗口已选模型，只刷新注册表
+      // 「新建任务」口径——沿用当前标签页最后一次手选，无缓存才回默认模型
+      conversationSelectionSeq++
       currentConversationId.value = null
       currentConversationTitle.value = '新会话'
       currentConversationDatasourceId.value = null
       conversationKey.value++
+      selectedConversationModelId.value = readCachedModelId()
       loadModelOptions(true)
     }
     conversationMemberDatasourceIds.value = nextIds
@@ -1297,9 +1365,20 @@ const LEGACY_STORAGE_KEYS = [
   'chatdata-conversation-view-mode',
   'chat_data_sql_ai_conversation_history',
 ]
+// 已删除功能按用户/数据源留存的旧前缀；同名键可能带 :user 或 :datasource:user 后缀。
+const LEGACY_STORAGE_PREFIXES = [
+  'chatdata:conversation-model',
+  'chatdata:conversation-semantic-config',
+  'chatdata:sql-ai-history',
+]
 const cleanupLegacyStorageKeys = () => {
   try {
     LEGACY_STORAGE_KEYS.forEach(key => localStorage.removeItem(key))
+    // 旧版模型记忆、语义模型选择、SQL 助手会话都已迁移或删除；不清理会在
+    // DevTools 里留下看似仍生效的孤立配置，SQL 助手历史还会长期占用体积。
+    Object.keys(localStorage)
+      .filter(key => LEGACY_STORAGE_PREFIXES.some(prefix => key === prefix || key.startsWith(`${prefix}:`)))
+      .forEach(key => localStorage.removeItem(key))
     sessionStorage.removeItem('chatdata-active-run-conversation')
   } catch {
     // storage 不可用（如宿主禁用）时清理失败无影响
@@ -1376,13 +1455,23 @@ onMounted(async () => {
         <div class="relative shrink-0 flex items-center gap-2">
           <button
             v-if="viewMode === 'conversation'"
-            class="w-8 h-8 flex shrink-0 items-center justify-center rounded-lg border-0 bg-transparent text-slate-500 cursor-pointer transition-colors hover:bg-slate-200/70 hover:text-slate-700"
-            :title="conversationConsoleVisible ? '收起右侧栏' : '展开右侧栏'"
-            :aria-label="conversationConsoleVisible ? '收起右侧栏' : '展开右侧栏'"
+            class="relative w-8 h-8 flex shrink-0 items-center justify-center rounded-lg border-0 bg-transparent text-slate-500 cursor-pointer transition-colors hover:bg-slate-200/70 hover:text-slate-700"
+            :title="conversationConsoleVisible ? '收起右侧栏' : (conversationSubagentActiveCount > 0 ? `${conversationSubagentActiveCount} 个子智能体执行中，展开右侧栏查看` : '展开右侧栏')"
+            :aria-label="conversationConsoleVisible ? '收起右侧栏' : (conversationSubagentActiveCount > 0 ? `${conversationSubagentActiveCount} 个子智能体执行中，展开右侧栏查看` : '展开右侧栏')"
             :aria-expanded="conversationConsoleVisible"
             data-conversation-console-toggle="true"
             @click="toggleConversationConsole"
           >
+            <span
+              v-if="conversationSubagentActiveCount > 0 && !conversationConsoleVisible"
+              class="subagent-activity-badge absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#1677FF] px-1 text-[9px] font-semibold leading-none text-white"
+              data-conversation-subagent-badge
+              aria-hidden="true"
+            >
+              <!-- 运行中呼吸光晕：与输入框停止按钮同款节奏，提示任务仍在后台推进。 -->
+              <span class="subagent-activity-halo" aria-hidden="true"></span>
+              <span class="relative">{{ conversationSubagentActiveCount }}</span>
+            </span>
             <!-- 面板 + 折叠箭头（与主流产品的侧栏开关同形）：面板近正方、细描边，
                  箭头为线性 chevron（非实心三角），展开时朝左、收起时朝右。 -->
             <svg class="h-[18px] w-[18px]" viewBox="0 0 16 16" aria-hidden="true">
@@ -1578,6 +1667,7 @@ onMounted(async () => {
                   :conversation-sort-by="conversationSortBy"
                   :hide-management="!!parentComponentName"
                   @select-conversation="handleHistoryConversationSelect"
+                  @replay-conversation="handleReplayConversation"
                   @new-conversation="handleNewConversation"
                   @load-more-conversations="loadMoreConversations"
                   @load-more-conversation-group="loadMoreConversationGroup"
@@ -1740,12 +1830,15 @@ onMounted(async () => {
                   :execution-target-multiple="true"
                   :selected-member-datasource-ids="conversationMemberDatasourceIds"
                   v-model:selected-model-id="selectedConversationModelId"
+                  @model-picked="rememberCachedModelId"
                   :can-import-semantic-model="canManageDatasource"
                   @import-semantic-yaml="handleImportSemanticYamlFromConversation"
                   class="h-full"
                   @first-message-started="handleFirstMessageStarted"
                   @run-status-changed="handleConversationRunStatusChanged"
+                  @conversation-title-changed="handleUpdateConversationTitle"
                   @console-visibility-changed="conversationConsoleVisible = $event"
+                  @subagent-active-count-changed="conversationSubagentActiveCount = $event"
                   @update:selected-member-datasource-ids="conversationMemberDatasourceIds = $event"
                   @dashboard-created="handleDashboardCreatedFromConversation"
                 />
@@ -2050,4 +2143,44 @@ body.is-resizing {
   z-index: var(--z-messagebox-overlay) !important;
 }
 
+</style>
+
+<style scoped>
+/*
+ * 右上角子智能体运行角标：柔和呼吸光晕，节奏对齐输入框停止按钮（ChatInputBox 的 breathe），
+ * 半径按角标尺寸收小，避免在 16px 圆点上扩散过大。
+ */
+.subagent-activity-badge {
+  animation: subagent-badge-breathe 1.8s ease-in-out infinite;
+}
+
+@keyframes subagent-badge-breathe {
+  0%, 100% {
+    box-shadow: 0 1px 4px rgba(22, 119, 255, 0.45), 0 0 0 0 rgba(22, 119, 255, 0.45);
+  }
+  50% {
+    box-shadow: 0 1px 6px rgba(22, 119, 255, 0.55), 0 0 0 5px rgba(22, 119, 255, 0.18);
+  }
+}
+
+/* 外层扩散光晕：从角标边缘向外缓慢放大并淡出，形成明显的呼吸圈。 */
+.subagent-activity-halo {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: rgba(22, 119, 255, 0.55);
+  pointer-events: none;
+  animation: subagent-activity-ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+@keyframes subagent-activity-ping {
+  0% {
+    transform: scale(1);
+    opacity: 0.5;
+  }
+  75%, 100% {
+    transform: scale(1.7);
+    opacity: 0;
+  }
+}
 </style>

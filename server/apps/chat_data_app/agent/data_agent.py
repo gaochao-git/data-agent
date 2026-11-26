@@ -26,8 +26,9 @@ from .agent_runtime import (
     build_standard_agent_middleware,
     create_streaming_chat_model,
 )
-from .agent_state import ChatDataAgentState
+from .agent_state import ChatDataAgentState, ChatDataRunContext
 from .approval_policy import ask_tool_names, resolve_approval_policies
+from .contracts.business_context import BusinessContext
 from .middleware.after_model_history import create_after_model_history_middleware
 from .middleware.context_compression import create_context_compression_middleware
 from .middleware.context_usage import create_request_context_usage_middleware
@@ -41,7 +42,7 @@ from .middleware.tool_execution_fence import create_tool_execution_fence_middlew
 from .middleware.tool_result import create_tool_result_middleware
 from .prompts.chat_data import (
     EXPLORE_SUBAGENT_PROMPT,
-    PLAN_SUBAGENT_PROMPT,
+    GENERAL_SUBAGENT_PROMPT,
     build_subagent_system_prompt,
     build_unified_system_prompt,
 )
@@ -100,14 +101,6 @@ class IdentityContext:
 
 
 @dataclass(frozen=True)
-class DatasourceContext:
-    """问哪个数据域——ChatData 业务概念，每轮请求可变。"""
-
-    datasource_id: str | None = None
-    source_type: str | None = None
-
-
-@dataclass(frozen=True)
 class ModelInvocationConfig:
     """模型怎么调——与业务无关的 LLM 调用参数。"""
 
@@ -130,7 +123,8 @@ class AgentAssemblySpec:
 
     - ``tool_includes`` / ``tool_excludes``：对 ``tools/registry.py`` 内置注册表
       的工具名级筛选；``tool_includes=None`` 表示全部内置工具，``tool_excludes``
-      优先级更高。子智能体仍只使用内置工具（MCP 等动态工具不下发给子智能体）。
+      优先级更高。explore 子智能体只继承只读内置工具；general 默认继承内置与
+      MCP 实体工具（MCP 检索网关仍只属于主图）。
     - ``enable_mcp_tools``：是否在装配时枚举 MCP/插件声明的动态工具
       （见 ``agent/mcp/manager.py``）；未配置任何 MCP server 时为空、零开销。
     - ``mcp_server_ids``：MCP server 白名单（``None`` 表示全部允许）；在
@@ -235,7 +229,7 @@ def assemble_tools(
     workspace_runtime: ConversationWorkspaceRuntime,
     *,
     identity_context: IdentityContext | None = None,
-    datasource_context: DatasourceContext | None = None,
+    business_context: BusinessContext | None = None,
     model_invocation: ModelInvocationConfig | None = None,
     spec: AgentAssemblySpec | None = None,
     run_controls: "AgentRunControls | None" = None,
@@ -251,7 +245,7 @@ def assemble_tools(
         runtime_options=runtime_options,
         workspace_runtime=workspace_runtime,
         identity=identity_context or IdentityContext(),
-        datasource=datasource_context or DatasourceContext(),
+        business=business_context or BusinessContext(),
         model_invocation=model_invocation or ModelInvocationConfig(),
     )
     skip_user_interaction = bool(run_controls and run_controls.disable_user_interaction)
@@ -280,22 +274,18 @@ def _build_enabled_tools(context: ToolBuildContext, *, skip_user_interaction: bo
 
 EXPLORE_SUBAGENT_NAME = "explore"
 EXPLORE_SUBAGENT_DESCRIPTION = (
-    "只读事实收集：遍历语义模型/多表/多指标做批量盘点、口径确认与数据核对，"
-    "只回传结构化事实清单，不写文件、不下最终结论。"
-    "适合需要跨多模型/多表摸底数据事实的场景。"
+    "只读事实收集：跨语义模型/多表/多指标盘点与口径核对，只回传事实清单，不写文件、不下结论，不能调用 MCP 工具。"
 )
 
-PLAN_SUBAGENT_NAME = "plan"
-PLAN_SUBAGENT_DESCRIPTION = (
-    "统一规划：为复杂任务产出可执行计划文件（步骤分解、输入路径、期望产出、验收标准），"
-    "报告类任务按办公技能 report-workflow 产出需求说明、样式清单与大纲。"
-    "只规划不执行，计划写入会话工作区，只回传计划路径与步骤清单。"
-    "适合多步骤报告、跨数据源综合分析等先规划后执行的任务。"
-    "子智能体与主智能体共享技能清单，但看不到主对话历史：任务相关的技能（尤其"
-    "用户自定义技能）建议在任务书中写明技能名称与 skill_file 路径。"
+GENERAL_SUBAGENT_NAME = "general"
+GENERAL_SUBAGENT_DESCRIPTION = (
+    "通用执行：读写文件、查数分析、用技能产出文档/报告，并回传结论与产出路径；"
+    "继承主智能体工具，可调用已接入的 MCP 实体工具，适合需落盘或依赖 MCP 的任务。"
 )
 
-# 每个子智能体显式声明需要哪些工具；不再使用“继承全部再排除”的隐式策略。
+# explore 是只读子智能体，必须 fail-closed：白名单固定只读工具，新增工具不会
+# 自动获得写权限。general 是通用执行体，默认继承主图可用工具（含 MCP 实体工具），
+# 只显式剔除子图无法安全承载的工具，新增能力无需同步维护清单。
 SUBAGENT_TOOL_ALLOWLISTS: dict[str, frozenset[str]] = {
     EXPLORE_SUBAGENT_NAME: frozenset(
         {
@@ -313,16 +303,21 @@ SUBAGENT_TOOL_ALLOWLISTS: dict[str, frozenset[str]] = {
             "calculator_tool",
         }
     ),
-    PLAN_SUBAGENT_NAME: frozenset(
+}
+SUBAGENT_TOOL_DENYLISTS: dict[str, frozenset[str]] = {
+    GENERAL_SUBAGENT_NAME: frozenset(
         {
-            "file_read",
-            "file_write",
-            "file_glob",
-            "file_grep",
-            "file_diff",
-            "dir_list",
-            "get_current_time",
-            "load_skill",
+            # 子图不支持人工中断：询问/审批类工具必须剔除，避免委派绕过审批。
+            "ask_user_question",
+            # 产物展示与任务计划由主智能体负责，子智能体只回传结论与路径。
+            "present_artifacts",
+            "write_todos",
+            # 禁止嵌套派发子智能体，也禁止子智能体绕过登记使用通用脚本执行器。
+            "subagent",
+            "bash_run",
+            # MCP 检索网关依赖主图发现中间件与可见性过滤，子图直接继承实体工具。
+            "mcp_tool_search",
+            "mcp_tool_call",
         }
     ),
 }
@@ -330,15 +325,25 @@ SUBAGENT_TOOL_ALLOWLISTS: dict[str, frozenset[str]] = {
 
 def _select_subagent_tools(
     tools: list,
-    allowed: frozenset[str],
-    approval_excluded: frozenset[str],
+    *,
+    allowed: frozenset[str] | None,
+    denied: frozenset[str] = frozenset(),
+    approval_excluded: frozenset[str] = frozenset(),
 ) -> list:
-    """从主图已装配工具中，按子智能体白名单取工具，并剔除审批工具。"""
-    return [
-        tool
-        for tool in tools
-        if (name := str(getattr(tool, "name", "") or "")) in allowed and name not in approval_excluded
-    ]
+    """按白名单或剔除集选择子智能体工具。
+
+    ``allowed`` 为 None 表示默认继承全部可用工具，再用 ``denied`` 显式剔除；
+    ``approval_excluded`` 始终生效（ask 档工具在子图不可交互）。
+    """
+    selected: list = []
+    for tool in tools:
+        name = str(getattr(tool, "name", "") or "")
+        if not name or name in denied or name in approval_excluded:
+            continue
+        if allowed is not None and name not in allowed:
+            continue
+        selected.append(tool)
+    return selected
 
 
 def _subagent_approval_exclusions(approval_policies: dict[str, str] | None = None) -> frozenset[str]:
@@ -360,10 +365,11 @@ def build_subagent_middleware(
 ) -> SubagentMiddleware | None:
     """按运行选项构建子智能体中间件；没有任何子智能体启用时返回 None。
 
-    每个子智能体按 ``SUBAGENT_TOOL_ALLOWLISTS`` 显式选择工具，使用与主智能体
-    相同的模型，运行在隔离上下文中；explore 白名单只含只读工具。
-    ``model_id`` 与主图同源传入：子图预算告警据此取同一 ContextBudget 的
-    压缩触发阈值，保证「上下文将尽」的口径与主图一致。
+    子智能体使用与主智能体相同的模型，运行在隔离上下文中：explore 按只读白名单
+    fail-closed；general 默认继承主图可用工具（含 MCP 实体工具），仅按
+    ``SUBAGENT_TOOL_DENYLISTS`` 剔除不可安全承载的工具。
+    ``model_id`` 与主图同源传入：子图据此取同一 ContextBudget 的压缩触发阈值，
+    保证压缩与用量展示口径和主图一致。
     ``available_skills_xml`` 与主智能体同一会话技能清单（一致继承）：子图
     system prompt 由此注入目录段，正文仍按需 file_read；未传或为空则不注入。
     ``memory_block`` 与主智能体同一份会话记忆条目（一致继承）：子图 system
@@ -379,8 +385,8 @@ def build_subagent_middleware(
                 system_prompt=build_subagent_system_prompt(EXPLORE_SUBAGENT_PROMPT),
                 tools=_select_subagent_tools(
                     tools,
-                    SUBAGENT_TOOL_ALLOWLISTS[EXPLORE_SUBAGENT_NAME],
-                    approval_excluded,
+                    allowed=SUBAGENT_TOOL_ALLOWLISTS[EXPLORE_SUBAGENT_NAME],
+                    approval_excluded=approval_excluded,
                 ),
                 model=model,
                 model_id=model_id,
@@ -389,16 +395,17 @@ def build_subagent_middleware(
                 sandbox_renewal=sandbox_renewal,
             )
         )
-    if runtime_options.plan_subagent_enabled:
+    if runtime_options.general_subagent_enabled:
         specs.append(
             SubagentSpec(
-                name=PLAN_SUBAGENT_NAME,
-                description=PLAN_SUBAGENT_DESCRIPTION,
-                system_prompt=build_subagent_system_prompt(PLAN_SUBAGENT_PROMPT),
+                name=GENERAL_SUBAGENT_NAME,
+                description=GENERAL_SUBAGENT_DESCRIPTION,
+                system_prompt=build_subagent_system_prompt(GENERAL_SUBAGENT_PROMPT),
                 tools=_select_subagent_tools(
                     tools,
-                    SUBAGENT_TOOL_ALLOWLISTS[PLAN_SUBAGENT_NAME],
-                    approval_excluded,
+                    allowed=None,
+                    denied=SUBAGENT_TOOL_DENYLISTS[GENERAL_SUBAGENT_NAME],
+                    approval_excluded=approval_excluded,
                 ),
                 model=model,
                 model_id=model_id,
@@ -471,11 +478,9 @@ def _mcp_tool_reminder(mcp_tools: list) -> str:
         listed += f"\n- …其余 {len(names) - 50} 个"
     return (
         "<system-reminder>\n"
-        "以下 MCP 工具可用（当前未加载 schema）：\n"
+        "以下 MCP 工具可用（schema 未加载）：先 mcp_tool_search 取 input_schema，"
+        "再通过 mcp_tool_call({name,input}) 调用，不要直接调用目标工具名。\n"
         f"{listed}\n"
-        "先调用 mcp_tool_search，query 传完整工具名（多个用 | 分隔）获取 input_schema；"
-        "不知道工具名时再用 search 参数（多个关键词也用 | 分隔）做关键词模糊检索。"
-        "拿到 input_schema 后再通过 mcp_tool_call({name,input}) 调用；不要直接调用目标工具名。\n"
         "</system-reminder>"
     )
 
@@ -575,6 +580,7 @@ def _resolve_workspace_runtime(
     runtime: ConversationWorkspaceRuntime | None,
     options: AgentRuntimeOptions,
     user_id: str | None,
+    username: str | None,
 ) -> ConversationWorkspaceRuntime:
     """未显式传入时构造历史回放工作区；独立函数控制装配函数复杂度。"""
     if runtime is not None:
@@ -584,6 +590,7 @@ def _resolve_workspace_runtime(
         workspace_root=workspace_paths["root"],
         user_id=user_id or "system",
         backend=options.workspace_backend,
+        username=str(username or "").strip(),
     )
 
 
@@ -615,7 +622,7 @@ class _AgentAssemblyInputs:
     spec: AgentAssemblySpec
     options: AgentRuntimeOptions
     identity: IdentityContext
-    datasource: DatasourceContext
+    business: BusinessContext
     invocation: ModelInvocationConfig
     model_id: str | None
     runtime: ConversationWorkspaceRuntime
@@ -643,7 +650,7 @@ def _resolve_assembly_inputs(
     checkpointer: BaseCheckpointSaver | None,
     conversation_id: str | None,
     identity_context: IdentityContext | None,
-    datasource_context: DatasourceContext | None,
+    business_context: BusinessContext | None,
     model_invocation: ModelInvocationConfig | None,
     workspace_runtime: ConversationWorkspaceRuntime | None,
     run_controls: AgentRunControls | None,
@@ -652,15 +659,20 @@ def _resolve_assembly_inputs(
     validate_agent_assembly_spec(spec)
     options = runtime_options or get_chat_data_default_runtime_options()
     identity = identity_context or IdentityContext()
-    datasource = datasource_context or DatasourceContext()
+    business = business_context or BusinessContext()
     invocation = model_invocation or ModelInvocationConfig()
     model_id = _normalize_model_id(invocation.model_id)
-    runtime = _resolve_workspace_runtime(workspace_runtime, options, identity.user_id)
+    runtime = _resolve_workspace_runtime(
+        workspace_runtime,
+        options,
+        identity.user_id,
+        identity.operator_name,
+    )
     return _AgentAssemblyInputs(
         spec=spec,
         options=options,
         identity=identity,
-        datasource=datasource,
+        business=business,
         invocation=invocation,
         model_id=model_id,
         runtime=runtime,
@@ -676,7 +688,7 @@ def _assemble_tools(inputs: _AgentAssemblyInputs) -> _AssembledTools:
         inputs.options,
         inputs.runtime,
         identity_context=inputs.identity,
-        datasource_context=inputs.datasource,
+        business_context=inputs.business,
         model_invocation=inputs.invocation,
         spec=inputs.spec,
         run_controls=inputs.run_controls,
@@ -773,7 +785,7 @@ def _assemble_middleware(
 ) -> list[Any]:
     subagent_middleware = build_subagent_middleware(
         inputs.options,
-        assembled.builtin_tools,
+        [*assembled.builtin_tools, *assembled.mcp_tools],
         model=model,
         model_id=inputs.model_id,
         run_controls=inputs.run_controls,
@@ -868,7 +880,7 @@ def create_agent_from_spec(
     checkpointer: BaseCheckpointSaver | None = None,
     conversation_id: str | None = None,
     identity_context: IdentityContext | None = None,
-    datasource_context: DatasourceContext | None = None,
+    business_context: BusinessContext | None = None,
     model_invocation: ModelInvocationConfig | None = None,
     workspace_runtime: ConversationWorkspaceRuntime | None = None,
     run_controls: AgentRunControls | None = None,
@@ -876,11 +888,11 @@ def create_agent_from_spec(
 ) -> CompiledStateGraph:
     """按声明式规格装配一个 LangGraph agent。
 
-    参数按关注点分组：``identity_context``（谁在问）、``datasource_context``
-    （问哪个数据域）、``model_invocation``（模型怎么调）、``run_controls``
+    参数按关注点分组：``identity_context``（谁在问）、``business_context``
+    （业务域上下文，内核不解释其含义）、``model_invocation``（模型怎么调）、``run_controls``
     （run 怎么管）；新增参数必须先归入其中一组或说明为何单列。
-    子智能体只使用内置工具（不含 MCP 等动态工具），且各子智能体的工具白名单
-    由 ``SUBAGENT_TOOL_ALLOWLISTS`` 显式声明。
+    explore 只使用只读白名单；general 默认继承主图可用工具（含 MCP 实体工具），
+    再由 ``SUBAGENT_TOOL_DENYLISTS`` 剔除不可安全承载的工具。
 
     ``conversation_id`` 单列：不参与 Agent 构建，仅供会话记忆压缩回调定位
     记忆文件（无会话标识的历史回放等调用方不传即关闭该回调）。
@@ -891,7 +903,7 @@ def create_agent_from_spec(
         checkpointer=checkpointer,
         conversation_id=conversation_id,
         identity_context=identity_context,
-        datasource_context=datasource_context,
+        business_context=business_context,
         model_invocation=model_invocation,
         workspace_runtime=workspace_runtime,
         run_controls=run_controls,
@@ -902,14 +914,18 @@ def create_agent_from_spec(
     context_runtime = _assemble_context_runtime(inputs, system_prompt, assembled.tools)
     model = _assemble_model(inputs)
     middleware = _assemble_middleware(inputs, assembled, system_prompt, context_runtime, model)
+    # 不传 name：LangChain 1.x 会把 name 写到每条 AIMessage 上，langchain-openai
+    # 又原样序列化进 OpenAI 请求体；严格校验的兼容模板（如 sensenova/mlx）要求
+    # assistant 的 name 等于其 tool call 名，多出的 agent 名会让工具调用后的续请求
+    # 直接 400。我们不接 LangSmith，这个名字只剩副作用。
     return create_agent(
         model=model,
         tools=assembled.tools,
         system_prompt=system_prompt,
         middleware=middleware,
         state_schema=ChatDataAgentState,
+        context_schema=ChatDataRunContext,
         checkpointer=inputs.checkpointer,
-        name=spec.agent_name,
     )
 
 
@@ -919,7 +935,7 @@ def describe_agent_assembly(
     *,
     conversation_id: str | None = None,
     identity_context: IdentityContext | None = None,
-    datasource_context: DatasourceContext | None = None,
+    business_context: BusinessContext | None = None,
     model_invocation: ModelInvocationConfig | None = None,
     workspace_runtime: ConversationWorkspaceRuntime | None = None,
     run_controls: AgentRunControls | None = None,
@@ -936,7 +952,7 @@ def describe_agent_assembly(
         checkpointer=None,
         conversation_id=conversation_id,
         identity_context=identity_context,
-        datasource_context=datasource_context,
+        business_context=business_context,
         model_invocation=model_invocation,
         workspace_runtime=workspace_runtime,
         run_controls=run_controls,

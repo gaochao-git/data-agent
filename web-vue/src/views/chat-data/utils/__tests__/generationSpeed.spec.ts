@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   formatGenerationSpeed,
+  formatSuperstepsLabel,
   formatTotalDurationLabel,
   generationStatsRows,
   type GenerationStatsRow,
@@ -9,6 +10,17 @@ import {
 } from '../generationSpeed'
 
 describe('toGenerationStats', () => {
+
+  it('supersteps / recursion_limit 合法时透出，仅步数也让 stats 成立', () => {
+    expect(toGenerationStats({ supersteps: 23, recursion_limit: 1000 })).toEqual({
+      supersteps: 23,
+      recursionLimit: 1000,
+    })
+    expect(toGenerationStats({ supersteps: 23 })?.supersteps).toBe(23)
+    expect(toGenerationStats({ supersteps: 0 })).toBeNull()
+    expect(toGenerationStats({ supersteps: -1 })).toBeNull()
+    expect(toGenerationStats({ supersteps: 23, recursion_limit: 0 })?.recursionLimit).toBeUndefined()
+  })
 
   it('snake_case 原始结构校验转换为 camelCase 统计', () => {
     expect(toGenerationStats({
@@ -196,5 +208,26 @@ describe('formatTotalDurationLabel', () => {
   it('非法输入返回空串', () => {
     expect(formatTotalDurationLabel(Number.NaN)).toBe('')
     expect(formatTotalDurationLabel(-1)).toBe('')
+  })
+})
+
+describe('formatSuperstepsLabel', () => {
+  it('有上限显示 N / limit 步，无上限只显示 N 步', () => {
+    expect(formatSuperstepsLabel(23, 1000)).toBe('23 / 1000 步')
+    expect(formatSuperstepsLabel(23)).toBe('23 步')
+    expect(formatSuperstepsLabel(23, 0)).toBe('23 步')
+  })
+
+  it('非法输入返回空串', () => {
+    expect(formatSuperstepsLabel(0)).toBe('')
+    expect(formatSuperstepsLabel(Number.NaN)).toBe('')
+  })
+})
+
+describe('generationStatsRows supersteps', () => {
+  it('步数存在时首行展示本轮步数，不影响 token 行顺序', () => {
+    const rows = generationStatsRows({ supersteps: 23, recursionLimit: 1000, outputTokens: 100, tokensPerSecond: 10, durationMs: 860 })
+    expect(rows[0]).toEqual({ label: '本轮步数', value: '23 / 1000 步' })
+    expect(rows[1]?.label).toBe('输出总token')
   })
 })

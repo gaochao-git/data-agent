@@ -70,7 +70,7 @@ def harness(monkeypatch):
         async with get_test_session() as session:
             session.add(ChatDataAgentSchedule(**fields))
 
-    async def seed_run(job_id="job-1", trigger_status="succeeded", plan_time=None):
+    async def seed_run(job_id="job-1", trigger_status="finished", plan_time=None):
         async with get_test_session() as session:
             session.add(
                 ChatDataAgentScheduleRun(
@@ -97,17 +97,20 @@ def harness(monkeypatch):
 async def test_overview_counts_jobs_and_runs(harness):
     await harness.seed_job("job-1", enabled_flag=1)
     await harness.seed_job("job-2", enabled_flag=0)
+    await harness.seed_run("job-1", trigger_status="finished")
     await harness.seed_run("job-1", trigger_status="succeeded")
     await harness.seed_run("job-1", trigger_status="failed")
+    await harness.seed_run("job-1", trigger_status="interrupted")
     await harness.seed_run("job-2", trigger_status="pending")
 
     overview = await harness.service.get_admin_overview()
 
     assert overview["total_jobs"] == 2
     assert overview["enabled_jobs"] == 1
-    assert overview["total_runs"] == 3
-    assert overview["succeeded_runs"] == 1
+    assert overview["total_runs"] == 5
+    assert overview["succeeded_runs"] == 2
     assert overview["failed_runs"] == 1
+    assert overview["interrupted_runs"] == 1
     assert overview["paused_flag"] == 0
 
 
@@ -150,21 +153,27 @@ async def test_control_row_lazily_created(harness):
 async def test_list_all_jobs_with_stats(harness):
     await harness.seed_job("job-1")
     await harness.seed_job("job-2", user_id="user-2")
-    await harness.seed_run("job-1", trigger_status="succeeded", plan_time=datetime(2026, 9, 12, 9, 0))
+    await harness.seed_run("job-1", trigger_status="finished", plan_time=datetime(2026, 9, 12, 9, 0))
     await harness.seed_run("job-1", trigger_status="failed", plan_time=datetime(2026, 9, 12, 10, 0))
+    await harness.seed_run("job-1", trigger_status="cancelled", plan_time=datetime(2026, 9, 12, 10, 30))
+    await harness.seed_run("job-1", trigger_status="succeeded", plan_time=datetime(2026, 9, 12, 10, 45))
+    await harness.seed_run("job-1", trigger_status="interrupted", plan_time=datetime(2026, 9, 12, 11, 0))
+    await harness.seed_run("job-2", trigger_status="succeeded", plan_time=datetime(2026, 9, 12, 11, 30))
 
     data = await harness.service.list_all_jobs()
     assert len(data["jobs"]) == 2
     first = next(job for job in data["jobs"] if job["job_id"] == "job-1")
     assert first["create_by_name"] == "用户一"
-    assert first["total_count"] == 2
-    assert first["succeeded_count"] == 1
+    assert first["total_count"] == 5
+    assert first["succeeded_count"] == 2
     assert first["failed_count"] == 1
-    assert first["last_run_status"] == "failed"
-    assert first["last_run_time"] == datetime(2026, 9, 12, 10, 0).isoformat()
+    assert first["cancelled_count"] == 1
+    assert first["interrupted_count"] == 1
+    assert first["last_run_status"] == "interrupted"
+    assert first["last_run_time"] == datetime(2026, 9, 12, 11, 0).isoformat()
     second = next(job for job in data["jobs"] if job["job_id"] == "job-2")
-    assert second["total_count"] == 0
-    assert second["last_run_status"] is None
+    assert second["total_count"] == 1
+    assert second["last_run_status"] == "finished"
 
     filtered = await harness.service.list_all_jobs(keyword="任务-job-2")
     assert [job["job_id"] for job in filtered["jobs"]] == ["job-2"]
@@ -298,7 +307,11 @@ async def test_admin_list_job_runs_without_ownership(harness):
     runs = result["runs"]
     assert result["total"] == 1
     assert len(runs) == 1
-    assert runs[0]["status"] == "succeeded"
+    assert runs[0]["status"] == "finished"
+    async with harness.session_factory() as session:
+        stored = (await session.execute(select(ChatDataAgentScheduleRun))).scalar_one()
+    # 状态统一只发生在业务读取层，数据库历史值保持原样。
+    assert stored.trigger_status == "succeeded"
     json.dumps(result)
     with pytest.raises(AgentScheduleNotFoundError):
         await harness.service.admin_list_job_runs(job_id="missing")

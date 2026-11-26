@@ -121,10 +121,10 @@ if _raw_workspace_backend not in ("local", "sandbox"):
     _raw_workspace_backend = "local"
 # 上面已做合法性校验回退，此处收紧为 Literal 供 AgentRuntimeOptions 使用
 CHAT_DATA_DEFAULT_WORKSPACE_BACKEND = cast('Literal["local", "sandbox"]', _raw_workspace_backend)
-# 是否注册 explore 子智能体（只读事实收集）；任一子智能体启用即注册 task 工具。
+# 是否注册 explore 子智能体（只读事实收集）；任一子智能体启用即注册子智能体工具组。
 CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED = read_bool_env("CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED", False)
-# 是否注册 plan 子智能体（统一规划：产出计划文件，只规划不执行）。
-CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED = read_bool_env("CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED", False)
+# 是否注册 general 子智能体（可读写执行：整理文件、查询分析、产出交付物）。
+CHAT_DATA_DEFAULT_GENERAL_SUBAGENT_ENABLED = read_bool_env("CHAT_DATA_DEFAULT_GENERAL_SUBAGENT_ENABLED", False)
 # 语义模型发现引导语（工具缺 semantic_config_id 的错误文案共用）：
 # 检索用法的单一维护点是「数据分析」技能（SKILL.md → references/analysis/query.md），错误提示统一
 # 指向该技能，不随工具开关切换文案，也不在此重复检索步骤。
@@ -133,32 +133,6 @@ SEMANTIC_MODEL_DISCOVERY_HINT = f"按 {DATA_ANALYZING_SKILL} 技能检索并确�
 CONTEXT_COMPRESSION_ENABLED = read_bool_env("CHAT_DATA_CONTEXT_COMPRESSION_ENABLED", True)
 CONTEXT_COMPRESSION_DEFAULT_TRIGGER_RATIO = 0.70
 CONTEXT_COMPRESSION_MAX_TRIGGER_RATIO = 0.95
-
-
-def read_optional_positive_ratio_env(name: str, *, maximum: float) -> float | None:
-    """读取可选的正比例 env（0 < value <= maximum）：无效配置直接拒启，不静默回退。"""
-    raw = str(os.getenv(name) or "").strip()
-    if not raw:
-        return None
-    try:
-        value = float(raw)
-    except ValueError as exc:
-        raise RuntimeError(f"{name} 必须是 0 到 {maximum} 之间的数字") from exc
-    if not math.isfinite(value) or value <= 0 or value > maximum:
-        raise RuntimeError(f"{name} 必须大于 0 且不超过 {maximum}，当前值: {value}")
-    return value
-
-
-# 子智能体预算告警线的可选覆盖（上下文窗口比例）：不设置时与主图压缩触发阈值
-# 同源（同一 ContextBudget.compression_trigger_tokens = 窗口 × TRIGGER_RATIO）；
-# 设置后仅覆盖子图告警线 = 窗口 × 该比例（不超过硬限），主图与子图压缩均不受
-# 影响。与压缩线同用比例口径，换模型/调窗口后配置不失真。主要用于压测/调试——
-# 设 0.05 之类的小值让告警线先于压缩线触发，肉眼验证「预算告警 → 提前收尾」
-# 链路，测完删除该 env 即恢复同源口径。
-SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO = read_optional_positive_ratio_env(
-    "CHAT_DATA_SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO",
-    maximum=CONTEXT_COMPRESSION_MAX_TRIGGER_RATIO,
-)
 
 
 def read_bounded_float_env(name: str, default: float, *, minimum: float, maximum: float) -> float:

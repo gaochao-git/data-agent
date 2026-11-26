@@ -33,7 +33,11 @@ def test_plugin_skill_rows_convert_and_skip_name_conflicts(tmp_path, monkeypatch
     skill_dir = _make_plugin_skill(tmp_path, "fault-analysis")
     conflict_dir = _make_plugin_skill(tmp_path, "data-analyzing")
     sources = [("fault-analysis", skill_dir), ("data-analyzing", conflict_dir)]
-    monkeypatch.setattr(plugins_loader_module, "enabled_plugin_skill_sources", lambda: sources)
+    monkeypatch.setattr(
+        plugins_loader_module,
+        "enabled_plugin_skill_sources",
+        lambda username="": sources,
+    )
 
     rows = skill_service_module._plugin_skill_rows(existing_names={"data-analyzing"})
 
@@ -50,7 +54,7 @@ def test_list_skills_async_includes_plugin_skills(tmp_path, monkeypatch):
     monkeypatch.setattr(
         plugins_loader_module,
         "enabled_plugin_skill_sources",
-        lambda: [("fault-analysis", skill_dir)],
+        lambda username="": [("fault-analysis", skill_dir)],
     )
 
     service = SkillService()
@@ -2494,8 +2498,8 @@ def test_list_runtime_skill_sources_async_includes_enabled_plugin_skills(monkeyp
     monkeypatch.setattr(plugin_loader, "plugins_root", lambda chat_data_home=None: plugins_home)
 
     class _FakeDao:
-        async def list_enabled_names(self):
-            return {"ops-readonly"}
+        async def list_enabled_access(self):
+            return {"ops-readonly": ("all", frozenset())}
 
     monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _FakeDao())
     plugin_loader.clear_metadata_cache()
@@ -2536,8 +2540,8 @@ def test_list_runtime_skill_sources_async_skips_conflicting_plugin_skill_name(mo
     monkeypatch.setattr(plugin_loader, "plugins_root", lambda chat_data_home=None: plugins_home)
 
     class _FakeDao:
-        async def list_enabled_names(self):
-            return {"ops-readonly"}
+        async def list_enabled_access(self):
+            return {"ops-readonly": ("all", frozenset())}
 
     monkeypatch.setattr(plugin_loader, "PluginDao", lambda *a, **k: _FakeDao())
     plugin_loader.clear_metadata_cache()
@@ -2566,7 +2570,7 @@ def test_get_plugin_skill_detail_async_returns_content_and_files(tmp_path, monke
     monkeypatch.setattr(
         plugins_loader_module,
         "enabled_plugin_skill_sources",
-        lambda: [("fault-analysis", skill_dir)],
+        lambda username="": [("fault-analysis", skill_dir)],
     )
 
     detail = asyncio.run(SkillService().get_skill_async("plugin:fault-analysis", user_id="u1"))

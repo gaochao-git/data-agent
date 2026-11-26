@@ -40,9 +40,9 @@ def test_dir_list_default_workspace(tmp_path):
     (Path(paths["workspace"]) / "note.txt").write_text("hi")
     _, tools = _build_tools(paths)
     out = _call(tools["dir_list"], path="/mnt/user-data/workspace")
-    assert "count=2" in out
     assert "type=file  path=/mnt/user-data/workspace/a.json" in out
     assert "type=file  path=/mnt/user-data/workspace/note.txt" in out
+    assert "type=dir  path=/mnt/user-data/workspace/.system/" in out
 
 
 def test_dir_list_canonical_path_and_recursion(tmp_path):
@@ -70,16 +70,16 @@ def test_dir_list_outputs_and_uploads(tmp_path):
 
 def test_dir_list_shows_tool_results(tmp_path):
     paths = ensure_conversation_workspace(str(tmp_path), user_id="system")
-    private_file = Path(paths["outputs"]) / ".tool-offload" / "result_1.json"
+    private_file = Path(paths["workspace"]) / ".system" / "tool-offload" / "result_1.json"
     private_file.write_text('{"rows":[1]}')
     _, tools = _build_tools(paths)
 
-    output = _call(tools["dir_list"], path="/mnt/user-data/outputs", max_depth=3)
-    direct = _call(tools["dir_list"], path="/mnt/user-data/outputs/.tool-offload")
+    output = _call(tools["dir_list"], path="/mnt/user-data/workspace/.system", max_depth=3)
+    direct = _call(tools["dir_list"], path="/mnt/user-data/workspace/.system/tool-offload")
 
-    assert "type=dir  path=/mnt/user-data/outputs/.tool-offload/" in output
+    assert "type=dir  path=/mnt/user-data/workspace/.system/tool-offload/" in output
     assert "result_1.json" in output
-    assert "type=file  path=/mnt/user-data/outputs/.tool-offload/result_1.json" in direct
+    assert "type=file  path=/mnt/user-data/workspace/.system/tool-offload/result_1.json" in direct
 
 
 def test_dir_list_rejects_out_of_session(tmp_path):

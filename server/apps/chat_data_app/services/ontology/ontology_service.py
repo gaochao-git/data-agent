@@ -343,9 +343,7 @@ class OntologyService:
             )
 
     @staticmethod
-    def _validate_conflict_resolution(
-        meta_payload: dict[str, Any], properties: list[dict[str, Any]]
-    ) -> None:
+    def _validate_conflict_resolution(meta_payload: dict[str, Any], properties: list[dict[str, Any]]) -> None:
         """读时冲突解决配置校验（对齐 how-edits-applied.md:121-139 的前置条件）。
 
         `apply_most_recent_value` 需要「输入数据源的 timestamp 属性」做比较：
@@ -376,17 +374,13 @@ class OntologyService:
             )
 
     @staticmethod
-    def _validate_conflict_timestamp_binding(
-        detail: dict[str, Any], column_mappings: dict[str, str]
-    ) -> None:
+    def _validate_conflict_timestamp_binding(detail: dict[str, Any], column_mappings: dict[str, str]) -> None:
         """apply_most_recent_value 的比较基准必须来自输入数据源（官方 `:129`）。"""
         if _text(detail.get("conflict_resolution")) != "apply_most_recent_value":
             return
         timestamp_property = _text(detail.get("conflict_timestamp_property"))
         if timestamp_property and timestamp_property not in column_mappings:
-            raise OntologyInvalidError(
-                f"冲突时间戳属性必须绑定到数据源列: {timestamp_property}"
-            )
+            raise OntologyInvalidError(f"冲突时间戳属性必须绑定到数据源列: {timestamp_property}")
 
     async def set_source_binding_async(
         self,

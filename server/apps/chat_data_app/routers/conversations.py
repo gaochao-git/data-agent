@@ -19,6 +19,8 @@ from utils.response import business_response
 
 from .. import AGENT_ID
 from ..agent.context.context_budget import strip_context_usage_content_for_history
+from ..agent.contracts.subagent_task import CANCEL_ORIGIN_USER, SubagentSessionActiveError
+from ..agent.middleware.subagent_trail_snapshot import load_live_trail_snapshot
 from ..agent.run.agent_inbox_service import (
     AgentQuestionNotFoundError,
     AgentQuestionNotWaitingError,
@@ -32,6 +34,13 @@ from ..agent.run.agent_run_event_service import agent_run_event_service
 from ..agent.run.agent_run_runtime import agent_run_runtime
 from ..agent.run.completion_options import parse_file_selections, parse_quoted_snippets
 from ..agent.run.conversation_event_service import conversation_event_service
+from ..agent.run.subagent_task_event_service import subagent_task_event_service
+from ..agent.run.subagent_task_service import (
+    TASK_STATUS_LABELS,
+    TERMINAL_TASK_STATUSES,
+    parse_task_status_filter,
+    subagent_task_service,
+)
 from ..agent.workspace.runtime_skill_snapshot import build_runtime_skill_snapshot_async
 from ..agent_run_support import (
     materialize_conversation_semantic_models,
@@ -302,11 +311,11 @@ def _get_user_id(request: Request) -> str:
 
 
 def _get_current_user_identity(request: Request) -> tuple[str, str]:
-    """获取当前用户ID和展示名称。"""
+    """获取当前用户 ID 与可信 username；username 缺失时不回退为 user_id。"""
     user = _get_current_user(request)
     user_id = getattr(user, "user_id", None) or getattr(user, "username", None) or "system"
-    username = getattr(user, "username", None) or user_id
-    return str(user_id), str(username)
+    username = str(getattr(user, "username", "") or "").strip()
+    return str(user_id), username
 
 
 # ============ 路由 ============
@@ -352,7 +361,7 @@ async def create_conversation(request: CreateConversationRequest, req: Request) 
             except Exception as err:
                 logger.warning("创建会话时技能快照构建失败，首次运行将重试: %s", err)
             # 选数据源即建会话（对齐 AI Coding：选定上下文 = 会话已存在）：
-            # 建会话即物化启用语义模型到 workspace/semantic/，输入框 @ 引用
+            # 建会话即物化启用语义模型到 workspace/.system/semantic/，输入框 @ 引用
             # 工作区文件从第一刻起就有语义模型可选。物化失败不阻断创建，
             # 首轮 run 的预物化会幂等兜底。
             if normalized_datasource_id:
@@ -538,7 +547,8 @@ async def get_conversation_detail(
     before_sequence: int | None = Query(
         default=None, ge=0, description="翻页游标：只返回 sequence_no 小于该值的历史事件"
     ),
-    strict_limit: bool = Query(default=False, description="长轮次硬上限：只返回 limit 条尾部事件，不补齐整轮"),
+    limit_turns: int | None = Query(default=None, ge=1, le=50, description="按完整轮次分页：返回最近 limit_turns 轮"),
+    before_turn_sequence: int | None = Query(default=None, ge=0, description="按轮次翻页游标：只返回该序号之前的轮次"),
 ) -> JSONResponse:
     """
     获取会话详情
@@ -571,7 +581,8 @@ async def get_conversation_detail(
             include_derived_history=view == "full",
             limit=limit,
             before_sequence=before_sequence,
-            strict_limit=strict_limit,
+            limit_turns=limit_turns,
+            before_turn_sequence=before_turn_sequence,
         )
         if not result:
             return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
@@ -1059,6 +1070,7 @@ async def cancel_question(conversation_id: str, question_id: str, req: Request) 
         )
 
 
+@router.get("/{conversation_id}/run-state")
 @router.get("/{conversation_id}/steer")
 async def list_steer_messages(conversation_id: str, req: Request) -> JSONResponse:
     """读取当前会话仍在排队的追加消息与运行状态，供前端刷新后恢复展示。"""
@@ -1085,6 +1097,299 @@ async def list_steer_messages(conversation_id: str, req: Request) -> JSONRespons
         )
 
 
+@router.get("/{conversation_id}/subagent-tasks")
+async def list_subagent_tasks(
+    conversation_id: str,
+    req: Request,
+    status_filter: str | None = Query(default=None, alias="status", max_length=64),
+    limit: int = Query(default=20, ge=1, le=100),
+) -> JSONResponse:
+    """列出当前会话的后台子智能体任务；刷新/重连后仍可恢复任务卡。"""
+    try:
+        user_id, _username = _get_current_user_identity(req)
+        records = await subagent_task_service.list_tasks(
+            conversation_id,
+            user_id,
+            statuses=parse_task_status_filter(status_filter),
+            limit=limit,
+        )
+        states = await subagent_task_service.list_session_states(
+            [getattr(record, "agent_session_id", "") or record.task_id for record in records],
+            conversation_id=conversation_id,
+            user_id=user_id,
+        )
+        tasks_payload = []
+        for record in records:
+            payload = record.as_dict(include_report=False)
+            state = states.get(getattr(record, "agent_session_id", "") or record.task_id)
+            payload["session_status"] = state.status if state else "open"
+            payload["session_closed_at"] = state.closed_at.isoformat() if state and state.closed_at else None
+            tasks_payload.append(payload)
+        return business_response(
+            data={"tasks": tasks_payload, "count": len(records)},
+            msg="ok",
+        )
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except Exception:
+        logger.error("读取后台子智能体任务失败: conversation_id=%s", conversation_id, exc_info=True)
+        return business_response(
+            msg="读取后台任务失败，请稍后重试",
+            code=ErrorCode.CHATDATA_BAD_REQUEST,
+            status="error",
+            http_status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@router.get("/{conversation_id}/subagent-tasks/{task_id}")
+async def get_subagent_task(conversation_id: str, task_id: str, req: Request) -> JSONResponse:
+    """读取单个后台任务的完整报告、错误与过程快照。"""
+    try:
+        user_id, _username = _get_current_user_identity(req)
+        record = await subagent_task_service.get_task(
+            task_id,
+            conversation_id=conversation_id,
+            user_id=user_id,
+        )
+        if record is None:
+            return business_response(
+                msg="后台任务不存在",
+                code=ErrorCode.CHATDATA_NOT_FOUND,
+                status="error",
+                http_status_code=http_status.HTTP_404_NOT_FOUND,
+            )
+        state = await subagent_task_service.get_session_state(
+            getattr(record, "agent_session_id", "") or record.task_id,
+            conversation_id=conversation_id,
+            user_id=user_id,
+        )
+        payload = record.as_dict()
+        payload["session_status"] = state.status if state else "open"
+        payload["session_closed_at"] = state.closed_at.isoformat() if state and state.closed_at else None
+        return business_response(data=payload, msg="ok")
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except Exception:
+        logger.error(
+            "读取后台子智能体任务详情失败: conversation_id=%s task_id=%s", conversation_id, task_id, exc_info=True
+        )
+        return business_response(
+            msg="读取后台任务详情失败，请稍后重试",
+            code=ErrorCode.CHATDATA_BAD_REQUEST,
+            status="error",
+            http_status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@router.post("/{conversation_id}/subagent-tasks/{task_id}/cancel")
+async def cancel_subagent_task(conversation_id: str, task_id: str, req: Request) -> JSONResponse:
+    """用户手动取消后台子智能体任务；执行节点下一次心跳停止协程。"""
+    try:
+        user_id, username = _get_current_user_identity(req)
+        record = await subagent_task_service.cancel_task(
+            conversation_id, user_id, task_id, username, origin=CANCEL_ORIGIN_USER
+        )
+        if record is None:
+            return business_response(
+                msg="后台任务不存在",
+                code=ErrorCode.CHATDATA_NOT_FOUND,
+                status="error",
+                http_status_code=http_status.HTTP_404_NOT_FOUND,
+            )
+        terminal = record.status in TERMINAL_TASK_STATUSES
+        return business_response(
+            data=record.as_dict(),
+            msg=(f"任务已是{TASK_STATUS_LABELS.get(record.status, record.status)}" if terminal else "已提交取消请求"),
+        )
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except Exception:
+        logger.error("取消后台子智能体任务失败: conversation_id=%s task_id=%s", conversation_id, task_id, exc_info=True)
+        return business_response(
+            msg="取消后台任务失败，请稍后重试",
+            code=ErrorCode.CHATDATA_BAD_REQUEST,
+            status="error",
+            http_status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@router.post("/{conversation_id}/subagent-tasks/{task_id}/close-session")
+async def close_subagent_session(conversation_id: str, task_id: str, req: Request) -> JSONResponse:
+    """用户关闭终态子智能体会话，释放当前主对话的子智能体额度；历史仍可查看。"""
+    try:
+        user_id, username = _get_current_user_identity(req)
+        state = await subagent_task_service.close_session(
+            task_id,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            operator_name=username,
+        )
+        if state is None:
+            return business_response(
+                msg="子智能体任务不存在",
+                code=ErrorCode.CHATDATA_NOT_FOUND,
+                status="error",
+                http_status_code=http_status.HTTP_404_NOT_FOUND,
+            )
+        return business_response(
+            data={
+                "task_id": task_id,
+                "session_id": state.session_id,
+                "session_status": state.status,
+                "session_closed_at": state.closed_at.isoformat() if state.closed_at else None,
+            },
+            msg="子智能体会话已关闭，额度已释放",
+        )
+    except SubagentSessionActiveError as exc:
+        return business_response(
+            msg=str(exc),
+            code=ErrorCode.CHATDATA_BAD_REQUEST,
+            status="error",
+            http_status_code=http_status.HTTP_409_CONFLICT,
+        )
+    except AgentRunNotActiveError as exc:
+        return business_response(
+            msg=str(exc),
+            code=ErrorCode.CHATDATA_NOT_FOUND,
+            status="error",
+            http_status_code=http_status.HTTP_404_NOT_FOUND,
+        )
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except Exception:
+        logger.error(
+            "关闭子智能体会话失败: conversation_id=%s task_id=%s",
+            conversation_id,
+            task_id,
+            exc_info=True,
+        )
+        return business_response(
+            msg="关闭子智能体失败，请稍后重试",
+            code=ErrorCode.CHATDATA_BAD_REQUEST,
+            status="error",
+            http_status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+@router.get("/{conversation_id}/subagent-tasks/{task_id}/trail")
+async def get_subagent_task_trail(conversation_id: str, task_id: str, req: Request) -> JSONResponse:
+    """返回运行中任务的检查点快照与续传游标，供详情页秒开；不可用时由前端回退全量重放。"""
+    try:
+        user_id, _username = _get_current_user_identity(req)
+        record = await subagent_task_service.get_task(
+            task_id,
+            conversation_id=conversation_id,
+            user_id=user_id,
+        )
+        if record is None:
+            return business_response(
+                msg="后台任务不存在",
+                code=ErrorCode.CHATDATA_NOT_FOUND,
+                status="error",
+                http_status_code=http_status.HTTP_404_NOT_FOUND,
+            )
+        if record.is_terminal:
+            return business_response(data={"available": False}, msg="ok")
+        # 先取游标再读快照：快照来自检查点、游标来自 Redis 事件流，两者异步推进。
+        # 若先读快照后取游标，两步之间写入的完成帧会落在游标之前，续传时被跳过，
+        # 快照里的 running 工具就会一直转圈。游标前置可保证「游标之后」的事件
+        # 至少和快照同时或更新，前端只补放快照之后发生的变化。
+        cursor = await subagent_task_event_service.latest_event_id(record.task_id)
+        snapshot = await load_live_trail_snapshot(
+            task_id=record.task_id,
+            agent_session_id=record.agent_session_id,
+        )
+        if snapshot is None or not cursor:
+            return business_response(data={"available": False}, msg="ok")
+        return business_response(
+            data={
+                "available": True,
+                "trail": snapshot["trail"],
+                "compactions": snapshot["compactions"],
+                "cursor": cursor,
+            },
+            msg="ok",
+        )
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except Exception:
+        logger.error(
+            "读取后台子智能体任务过程快照失败: conversation_id=%s task_id=%s",
+            conversation_id,
+            task_id,
+            exc_info=True,
+        )
+        return business_response(data={"available": False}, msg="ok")
+
+
+@router.get("/{conversation_id}/subagent-tasks/{task_id}/events", responses=SSE_RESPONSES)
+async def stream_subagent_task_events(conversation_id: str, task_id: str, req: Request) -> Response:
+    """订阅后台子智能体的过程消息；父 Run 结束后仍可实时查看。"""
+    try:
+        user_id, _username = _get_current_user_identity(req)
+        record = await subagent_task_service.get_task(
+            task_id,
+            conversation_id=conversation_id,
+            user_id=user_id,
+        )
+        if record is None:
+            return business_response(
+                msg="后台任务不存在",
+                code=ErrorCode.CHATDATA_NOT_FOUND,
+                status="error",
+                http_status_code=http_status.HTTP_404_NOT_FOUND,
+            )
+        last_event_id = req.headers.get("Last-Event-ID") or "0-0"
+
+        async def is_terminal() -> bool:
+            current = await subagent_task_service.get_task(
+                task_id,
+                conversation_id=conversation_id,
+                user_id=user_id,
+            )
+            return current is None or current.is_terminal
+
+        async def event_stream() -> AsyncIterator[str]:
+            from ..agent.run.sse_heartbeat import stream_sse_with_heartbeat
+
+            async for frame in stream_sse_with_heartbeat(
+                subagent_task_event_service.stream(
+                    task_id=task_id,
+                    last_event_id=last_event_id,
+                    is_terminal=is_terminal,
+                    is_disconnected=req.is_disconnected,
+                ),
+                is_disconnected=req.is_disconnected,
+            ):
+                yield frame
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+                "X-ChatData-Subagent-Task-Id": task_id,
+            },
+        )
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except Exception:
+        logger.error(
+            "订阅后台子智能体事件失败: conversation_id=%s task_id=%s",
+            conversation_id,
+            task_id,
+            exc_info=True,
+        )
+        return business_response(
+            msg="订阅后台任务事件失败，请稍后重试",
+            code=ErrorCode.CHATDATA_BAD_REQUEST,
+            status="error",
+            http_status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
 @router.get("/{conversation_id}/runs/{run_id}/events", responses=SSE_RESPONSES)
 async def stream_run_events(
     conversation_id: str,
@@ -1106,12 +1411,17 @@ async def stream_run_events(
         last_event_id = req.headers.get("Last-Event-ID") or "0-0"
 
         async def event_stream() -> AsyncIterator[str]:
-            async for event in agent_run_event_service.stream(
-                run_id=run_id,
-                last_event_id=last_event_id,
+            from ..agent.run.sse_heartbeat import stream_sse_with_heartbeat
+
+            async for frame in stream_sse_with_heartbeat(
+                agent_run_event_service.stream(
+                    run_id=run_id,
+                    last_event_id=last_event_id,
+                    is_disconnected=req.is_disconnected,
+                ),
                 is_disconnected=req.is_disconnected,
             ):
-                yield f"id: {event['stream_id']}\n{event['payload']}"
+                yield frame
 
         return StreamingResponse(
             event_stream(),
@@ -1259,8 +1569,18 @@ async def get_conversation_context(conversation_id: str, req: Request) -> JSONRe
             return business_response(msg="对话不存在", code=ErrorCode.CHATDATA_NOT_FOUND, status="error")
 
         datasource_id = await conversation.get_datasource_id(conversation_id, user_id)
+        try:
+            model_id = await conversation_event_service.get_latest_model_id(
+                conversation_id=conversation_id,
+                user_id=user_id,
+            )
+        except Exception:
+            # 模型名只是选择器展示信息，读取失败不能阻断历史会话打开。
+            logger.warning("读取会话最近模型失败: conversation_id=%s", conversation_id, exc_info=True)
+            model_id = ""
         return business_response(
-            data={"conversation_id": conversation_id, "datasource_id": datasource_id}, msg="获取成功"
+            data={"conversation_id": conversation_id, "datasource_id": datasource_id, "model_id": model_id or None},
+            msg="获取成功",
         )
     except AuthenticationError as e:
         raise HTTPException(status_code=e.status_code, detail=e.message) from e

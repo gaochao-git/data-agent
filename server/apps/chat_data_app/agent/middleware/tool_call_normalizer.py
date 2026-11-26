@@ -115,7 +115,7 @@ def create_tool_call_name_normalizer_middleware(
     def _candidate_tools(request: ModelRequest) -> list[Any]:
         """本轮模型真正可见的工具集。
 
-        必须取 ``request.tools``：``write_todos``、``task`` 等由 ``middleware.tools``
+        必须取 ``request.tools``：``write_todos``、``subagent`` 等由 ``middleware.tools``
         注册，不在业务 ``tools`` 静态列表里；拿静态列表当候选名，这些工具的重复名就
         修不回来（内网 vLLM/GLM 实际踩过）。``request.tools`` 含全部已注册工具，也会
         随中间件的动态增删同步变化，才是模型输出名称唯一对应的集合。

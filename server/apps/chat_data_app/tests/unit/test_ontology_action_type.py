@@ -97,9 +97,7 @@ class _FakeInstanceDao:
         self.rows: dict[str, dict] = {}
 
     def _row(self, object_key):
-        return self.rows.setdefault(
-            object_key, {"generation": 1, "lifecycle_status": "active", "last_execution_id": 0}
-        )
+        return self.rows.setdefault(object_key, {"generation": 1, "lifecycle_status": "active", "last_execution_id": 0})
 
     async def get_instance_async(self, object_type_id, object_key):
         row = self.rows.get(object_key)
@@ -913,9 +911,7 @@ def test_execute_rejects_stale_baseline_and_writes_nothing(monkeypatch):
 def test_execute_accepts_matching_baseline_and_records_it(monkeypatch):
     projection = _baseline_object()
     _patch_execute_env(monkeypatch, projection)
-    expected = service_module._row_fingerprint(
-        projection["source_properties"], scope="object"
-    )
+    expected = service_module._row_fingerprint(projection["source_properties"], scope="object")
     fake_execution = _FakeExecutionDao()
     service = _service(execution_dao=fake_execution)
     asyncio.run(service.upsert_action_type_async("update_order_status", {**_payload(), "status": "certified"}))
@@ -1013,7 +1009,9 @@ def _execution_row(**overrides):
         "edited_object_keys": ["sales_order:ORD2024000001"],
         "action_type_version": 3,
         "revert_of_execution_id": 0,
-        "edits": [{"operation": "set_property", "property": "pay_status", "value": {"kind": "static", "value": "paid"}}],
+        "edits": [
+            {"operation": "set_property", "property": "pay_status", "value": {"kind": "static", "value": "paid"}}
+        ],
         "baseline": {
             "object_key": "sales_order:ORD2024000001",
             "object_generation": 1,
@@ -1049,7 +1047,7 @@ def test_revert_appends_inverse_edit_and_marks_original(monkeypatch):
     assert dao.edits[0]["value"] == "unpaid"
     assert dao.edits[0]["object_generation"] == 1
     assert dao.edits[0]["action_execution_id"] == 500
-    assert dao.created["revert_of_execution_id"] == 42
+    assert dao.created["options"].revert_of_execution_id == 42
     assert dao.marked == (42, "u1")
 
 
@@ -1131,9 +1129,7 @@ def test_revert_delete_rejects_when_object_was_recreated(monkeypatch):
         "lifecycle_status": "active",
         "last_execution_id": 44,
     }
-    dao = _FakeRevertDao(
-        _execution_row(edits=[{"operation": "delete_object"}], baseline={"object_generation": 1})
-    )
+    dao = _FakeRevertDao(_execution_row(edits=[{"operation": "delete_object"}], baseline={"object_generation": 1}))
     service = _revert_service(dao, instance_dao=instance_dao)
     with pytest.raises(OntologyInvalidError, match="对象状态已变化"):
         asyncio.run(service.revert_execution_async("update_order_status", 42, operator="u1"))

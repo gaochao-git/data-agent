@@ -6,7 +6,7 @@
 ## 运行态摘要统一入口
 
 `context_budget.resolve_context_summary()` / `inject_runtime_context_summary()` 是主图压缩、
-主图请求注入、子图压缩与子图预算提示共用的摘要处理入口：
+主图请求注入与子图压缩共用的摘要处理入口：
 
 - 剥离旧 checkpoint 中以 SystemMessage 内嵌的压缩摘要（`context_compression` 标记）；
 - 合并 state 运行态摘要与遗留摘要，去重并保持顺序；

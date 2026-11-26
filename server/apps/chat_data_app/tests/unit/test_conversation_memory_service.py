@@ -97,6 +97,46 @@ def test_merge_memory_items_appends_dedups_and_evicts_oldest(workspace_root, mem
     assert (workspace_root / "memory" / "memory.md").read_text(encoding="utf-8") == (render_memory_document(merged))
 
 
+def test_replace_memory_document_requires_current_mtime_and_preserves_user_text(workspace_root):
+    root = str(workspace_root)
+    memory_path = workspace_root / "memory" / "memory.md"
+    memory_path.parent.mkdir(parents=True)
+    memory_path.write_text(render_memory_document([MemoryItem(category="口径", content="A")]), encoding="utf-8")
+    # 部分生产文件系统的 mtime 精度较粗；显式设旧，避免连续两次写入落在同一时间刻度。
+    os.utime(memory_path, (1_600_000_000, 1_600_000_000))
+    expected_mtime = memory_path.stat().st_mtime
+    edited = "# 会话记忆\n\n- [偏好] 用户手动维护的条目\n"
+
+    payload = svc.replace_memory_document(root, edited, expected_mtime=expected_mtime, max_bytes=1024)
+
+    assert payload["path"] == "/mnt/user-data/memory/memory.md"
+    assert payload["bytes"] == len(edited.encode("utf-8"))
+    assert payload["mtime"] > expected_mtime
+    assert memory_path.read_text(encoding="utf-8") == edited
+    assert not list(workspace_root.glob(".memory-*.tmp"))
+    with pytest.raises(svc.MemoryDocumentConflictError, match="刷新后重试"):
+        svc.replace_memory_document(root, "stale", expected_mtime=expected_mtime, max_bytes=1024)
+
+
+def test_replace_memory_document_rejects_missing_oversized_and_symlink(workspace_root):
+    root = str(workspace_root)
+    with pytest.raises(FileNotFoundError, match="记忆文件不存在"):
+        svc.replace_memory_document(root, "x", expected_mtime=1.0, max_bytes=1024)
+
+    memory_path = workspace_root / "memory" / "memory.md"
+    memory_path.parent.mkdir(parents=True)
+    memory_path.write_text("small", encoding="utf-8")
+    with pytest.raises(ValueError, match="大小限制"):
+        svc.replace_memory_document(root, "too-large", expected_mtime=memory_path.stat().st_mtime, max_bytes=3)
+
+    target = workspace_root / "memory" / "target.md"
+    target.write_text("target", encoding="utf-8")
+    memory_path.unlink()
+    memory_path.symlink_to(target)
+    with pytest.raises(ValueError, match="符号链接"):
+        svc.replace_memory_document(root, "x", expected_mtime=target.stat().st_mtime, max_bytes=1024)
+
+
 def test_merge_memory_items_two_processes_no_loss(tmp_path, workspace_root, memory_env):
     """双进程并发合并：flock 临界区保证两个进程的不同条目都落盘。"""
     script = tmp_path / "memory_writer.py"
@@ -391,12 +431,19 @@ async def test_extract_and_save_memory_merge_failure_degrades(monkeypatch, tmp_p
 
     monkeypatch.setattr(svc, "extract_memory_items", fake_extract_items)
 
+    merge_calls: list[tuple] = []
+
     def broken_merge(*args, **kwargs):
+        merge_calls.append(args)
         raise OSError("disk full")
 
     monkeypatch.setattr(svc, "merge_memory_items", broken_merge)
-    # 不抛出即通过（失败只告警降级）
     await svc.extract_and_save_memory(conversation_id="c1", workspace_root=str(tmp_path), model_id="m", messages=[])
+
+    # 确实走到了写入（而非抽取为空提前返回），失败被吞掉且没有留下半写的记忆文件
+    assert len(merge_calls) == 1
+    assert not (tmp_path / "memory" / "memory.md").exists()
+    assert svc.load_memory_items(str(tmp_path)) == []
 
 
 # ---------------------------------------------------------------------------

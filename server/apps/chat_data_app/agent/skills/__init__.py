@@ -3,9 +3,9 @@ Skills 模块
 
 符合 agentskills.io 规范的 skill 实现。
 
-部署时将本包中的技能目录复制到
-`CHAT_DATA_HOME/skills/system/`。运行时只读取该部署目录，应用不会自动
-复制，也不会将系统技能写入数据库。
+系统技能直接以本代码包内的技能目录为唯一真值（随发版更新、只读），不再
+复制到 `CHAT_DATA_HOME/skills/system/`；应用不自动复制，也不将系统技能写入数据库。
+用户技能仍落在 `CHAT_DATA_HOME/skills/user/`，由数据库元数据与版本目录管理。
 
 API：
 - parse_metadata(skill_path): 解析单个技能元数据

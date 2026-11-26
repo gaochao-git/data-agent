@@ -569,7 +569,7 @@ async def test_save_stdout_to_accepts_workspace_absolute_path(monkeypatch, tmp_p
         ("diff_demo.txt", "路径必须以"),
         ("workspace/../outputs/x.txt", "路径必须以"),
         ("/mnt/user-data/workspace/../outputs/x.txt", "越界"),
-        ("/mnt/user-data/workspace/semantic/model.yaml", "只读快照"),
+        ("/mnt/user-data/workspace/.system/semantic/model.yaml", "只读快照"),
     ],
 )
 async def test_save_stdout_to_rejects_non_workspace_paths(tmp_path, bad_path, expected):

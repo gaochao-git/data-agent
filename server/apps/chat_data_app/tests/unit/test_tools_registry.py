@@ -12,8 +12,8 @@ os.environ.setdefault("FXCJG_DB_HOST", "127.0.0.1:3306")
 os.environ.setdefault("FXCJG_DB", "fxcjg_test")
 os.environ.setdefault("FXCJG_DB_USER", "fxcjg_test")
 
+from apps.chat_data_app.agent.contracts.business_context import BusinessContext  # noqa: E402
 from apps.chat_data_app.agent.data_agent import (  # noqa: E402
-    DatasourceContext,
     IdentityContext,
     assemble_tools,
 )
@@ -43,6 +43,7 @@ EXPECTED_WITHOUT_BASH = [
     "dir_delete",
     "parse_document",
     "read_image",
+    "data2image",
     "present_artifacts",
     "get_current_time",
     "load_skill",
@@ -69,7 +70,7 @@ def _tool_names(tmp_path):
             options,
             runtime,
             identity_context=IdentityContext(user_id="u1", operator_name="测试用户"),
-            datasource_context=DatasourceContext(datasource_id="ds_a"),
+            business_context=BusinessContext(values={"datasource_id": "ds_a"}),
         )
     ]
 
@@ -119,18 +120,39 @@ def test_ontology_tool_requires_feature_switch_in_ontology_mode(tmp_path, monkey
     assert "data_analyzing_tool" not in names
 
 
-def test_subagent_allowlists_are_explicit_and_registered():
-    """子智能体按需声明工具白名单，不再使用“继承后忽略”的隐式排除集。"""
-    from apps.chat_data_app.agent.data_agent import SUBAGENT_TOOL_ALLOWLISTS
+def test_subagent_tool_selection_is_explicit_and_registered():
+    """explore 用只读白名单 fail-closed；general 默认继承并显式剔除不可承载工具。"""
+    from apps.chat_data_app.agent.data_agent import (
+        SUBAGENT_TOOL_ALLOWLISTS,
+        SUBAGENT_TOOL_DENYLISTS,
+    )
+    from apps.chat_data_app.agent.tools.registry import MIDDLEWARE_INJECTED_APPROVAL_TOOLS
 
-    registered = provided_tool_names()
-    assert set(SUBAGENT_TOOL_ALLOWLISTS) == {"explore", "plan"}
+    registered = provided_tool_names() | set(MIDDLEWARE_INJECTED_APPROVAL_TOOLS)
+    assert set(SUBAGENT_TOOL_ALLOWLISTS) == {"explore"}
+    assert set(SUBAGENT_TOOL_DENYLISTS) == {"general"}
     for name, allowed in SUBAGENT_TOOL_ALLOWLISTS.items():
         unknown = allowed - registered
         assert not unknown, f"{name} 白名单引用了未注册工具: {sorted(unknown)}"
         assert "ask_user_question" not in allowed
         assert "present_artifacts" not in allowed
         assert "bash_run" not in allowed
+        # 子智能体不能再派子智能体：subagent 工具只能由主智能体持有。
+        assert "subagent" not in allowed
+    denied = SUBAGENT_TOOL_DENYLISTS["general"]
+    unknown_denied = denied - registered
+    assert not unknown_denied, f"general 剔除集引用了未注册工具: {sorted(unknown_denied)}"
+    # 询问/审批、产物展示、任务计划、嵌套派发、脚本执行与 MCP 检索网关
+    # 都不能进入子图；新增工具默认继承，不在这张表里就自动可用。
+    assert {
+        "ask_user_question",
+        "present_artifacts",
+        "write_todos",
+        "subagent",
+        "bash_run",
+        "mcp_tool_search",
+        "mcp_tool_call",
+    } <= denied
 
 
 def test_built_tools_are_declared_in_provides(tmp_path):
@@ -166,11 +188,11 @@ def test_system_tools_use_same_ask_allow_map_as_mcp():
 
     assert set(SYSTEM_TOOL_APPROVALS) == provided_tool_names() | MIDDLEWARE_INJECTED_APPROVAL_TOOLS
     assert set(SYSTEM_TOOL_APPROVALS.values()) == {"allow"}
-    # write_todos / task 由中间件装配，不经过 TOOL_BUILD_GROUPS，但必须显式 allow 且进入铺底表
-    assert {"write_todos", "task", "mcp_tool_search", "mcp_tool_call"} == MIDDLEWARE_INJECTED_APPROVAL_TOOLS
+    # write_todos / subagent 由中间件装配，不经过 TOOL_BUILD_GROUPS，但必须显式 allow 且进入铺底表
+    assert {"write_todos", "subagent", "mcp_tool_search", "mcp_tool_call"} == MIDDLEWARE_INJECTED_APPROVAL_TOOLS
     assert not {name for name, approval in SYSTEM_TOOL_APPROVALS.items() if approval == "ask"}
     assert system_tool_approval("write_todos") == "allow"
-    assert system_tool_approval("task") == "allow"
+    assert system_tool_approval("subagent") == "allow"
 
 
 def test_required_skills_target_builtin_skills_only():

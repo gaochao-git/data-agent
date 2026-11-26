@@ -137,6 +137,37 @@ class ConversationDao:
                     statuses[conversation_id] = status
             return statuses
 
+    async def list_latest_finished_run_times(
+        self,
+        conversation_ids: list[str],
+        user_id: str | None,
+    ) -> dict[str, datetime]:
+        """批量读取会话最近一次成功完成的 Run 时间。"""
+        if not conversation_ids:
+            return {}
+        conditions = [
+            ChatDataAgentInbox.conversation_id.in_(conversation_ids),
+            ChatDataAgentInbox.record_type == "run",
+            ChatDataAgentInbox.record_status == "finished",
+            ChatDataAgentInbox.delete_flag == 0,
+        ]
+        if user_id:
+            conditions.append(ChatDataAgentInbox.user_id == user_id)
+        async with self._session_context() as session:
+            result = await session.execute(
+                select(
+                    ChatDataAgentInbox.conversation_id,
+                    func.max(ChatDataAgentInbox.update_time),
+                )
+                .where(*conditions)
+                .group_by(ChatDataAgentInbox.conversation_id)
+            )
+            return {
+                conversation_id: finished_at
+                for conversation_id, finished_at in result.all()
+                if conversation_id and finished_at is not None
+            }
+
     @staticmethod
     def _list_conditions(agent_id: str, user_id: str | None) -> list[Any]:
         conditions = [UserThread.agent_id == agent_id, UserThread.delete_flag == 0]
@@ -239,6 +270,27 @@ class ConversationDao:
                 .values(thread_title=title, update_time=datetime.now(), update_by=user_id or "")
             )
             return True
+
+    async def update_title_if_placeholder(
+        self,
+        *,
+        conversation_id: str,
+        title: str,
+        user_id: str | None,
+        placeholders: tuple[str, ...],
+    ) -> bool:
+        """仅在标题仍为占位符时更新，避免迟到的自动标题覆盖用户改名。"""
+        async with self._session_context() as session:
+            update_conditions = [
+                *self._thread_conditions(conversation_id, user_id),
+                or_(UserThread.thread_title.is_(None), UserThread.thread_title.in_(placeholders)),
+            ]
+            result = await session.execute(
+                sa_update(UserThread)
+                .where(*update_conditions)
+                .values(thread_title=title, update_time=datetime.now(), update_by=user_id or "")
+            )
+            return bool(cast(CursorResult[Any], result).rowcount)
 
     async def toggle_favorite(self, *, conversation_id: str, user_id: str | None) -> bool | None:
         async with self._session_context() as session:

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import cast
@@ -370,9 +371,27 @@ async def test_drill_redis_flush_zombie_until_reaper_closes(drill, monkeypatch):
 
     await drill.expire_lease(run_id)
     await drill.runtime._reap_expired_runs()
+    row = await drill.run_row(run_id)
+    assert row is not None and row.record_status == "interrupting"
+
+    # 两阶段宽限期：第一次只发停止信号，第二次才落 interrupted 终态。
+    async with drill.session_factory() as session:
+        row = (
+            await session.execute(
+                select(ChatDataAgentInbox).where(
+                    ChatDataAgentInbox.run_id == run_id,
+                    ChatDataAgentInbox.record_type == "run",
+                )
+            )
+        ).scalar_one()
+        content = json.loads(row.record_content)
+        content["reap_deadline_ms"] = 1
+        row.record_content = json.dumps(content, ensure_ascii=False)
+        await session.commit()
+    await drill.runtime._reap_expired_runs()
 
     row = await drill.run_row(run_id)
-    assert row is not None and row.record_status == "failed"
+    assert row is not None and row.record_status == "interrupted"
     assert [message.record_status for message in await drill.message_rows()] == ["pending"]
 
     await asyncio.wait_for(subscriber, timeout=10)
@@ -381,7 +400,7 @@ async def test_drill_redis_flush_zombie_until_reaper_closes(drill, monkeypatch):
     # 清空场景（服务仍活）SSE 收到的是 reaper 补发的真实 done，不是合成兜底
     assert done_events[0]["event_id"].startswith(f"{run_id}:terminal:")
     assert done_events[0]["event_id"] != f"{run_id}:terminal:fallback"
-    assert '"status": "failed"' in done_events[0]["payload"]
+    assert '"status": "interrupted"' in done_events[0]["payload"]
 
     from utils.models import ChatDataConversationEvent
 

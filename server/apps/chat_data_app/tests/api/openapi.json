@@ -962,6 +962,36 @@
         "title": "CompletionRequest",
         "type": "object"
       },
+      "ConversationWorkspaceFileSaveRequest": {
+        "description": "会话工作区文本文件保存请求。",
+        "properties": {
+          "content": {
+            "default": "",
+            "description": "完整文件内容",
+            "title": "Content",
+            "type": "string"
+          },
+          "expected_mtime": {
+            "description": "读取时的文件修改时间（秒级 Unix 时间戳）",
+            "minimum": 0.0,
+            "title": "Expected Mtime",
+            "type": "number"
+          },
+          "path": {
+            "description": "工作区规范路径",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "expected_mtime"
+        ],
+        "title": "ConversationWorkspaceFileSaveRequest",
+        "type": "object"
+      },
       "CreateConversationRequest": {
         "description": "创建会话请求",
         "properties": {
@@ -3641,6 +3671,31 @@
           "enabled"
         ],
         "title": "PluginEnabledRequest",
+        "type": "object"
+      },
+      "PluginPermissionRequest": {
+        "description": "插件人员授权请求；username 唯一且保留大小写。",
+        "properties": {
+          "scope_type": {
+            "enum": [
+              "all",
+              "selected"
+            ],
+            "title": "Scope Type",
+            "type": "string"
+          },
+          "user_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "User Names",
+            "type": "array"
+          }
+        },
+        "required": [
+          "scope_type"
+        ],
+        "title": "PluginPermissionRequest",
         "type": "object"
       },
       "QueryFavoriteCreateRequest": {
@@ -11527,6 +11582,64 @@
         ]
       }
     },
+    "/api/chatdata/admin/plugins/{plugin_id}/permissions": {
+      "put": {
+        "description": "设置插件对全部用户或指定 username 可用；只影响插件及其技能。",
+        "operationId": "update_plugin_permissions_api_chatdata_admin_plugins__plugin_id__permissions_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "plugin_id",
+            "required": true,
+            "schema": {
+              "title": "Plugin Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PluginPermissionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Update Plugin Permissions",
+        "tags": [
+          "ChatData 插件管理（Admin）"
+        ]
+      }
+    },
     "/api/chatdata/admin/query-history": {
       "get": {
         "description": "获取后台全局 SQL 查询历史。",
@@ -11966,6 +12079,313 @@
         "summary": "Upsert Chat Data Setting",
         "tags": [
           "ChatData 运行配置（Admin）"
+        ]
+      }
+    },
+    "/api/chatdata/admin/skills": {
+      "get": {
+        "description": "后台管理：技能总览（系统 / 用户 / 插件，跨用户且含停用），只读。",
+        "operationId": "list_admin_skills_api_chatdata_admin_skills_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "List Admin Skills",
+        "tags": [
+          "ChatData 技能"
+        ]
+      }
+    },
+    "/api/chatdata/admin/skills/{skill_id}/files/content": {
+      "get": {
+        "description": "后台管理：只读读取任一技能版本目录下的 references/assets 文本文件。",
+        "operationId": "read_admin_skill_file_api_chatdata_admin_skills__skill_id__files_content_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "skill_id",
+            "required": true,
+            "schema": {
+              "title": "Skill Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "dir_name",
+            "required": true,
+            "schema": {
+              "title": "Dir Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "file_path",
+            "required": true,
+            "schema": {
+              "title": "File Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "version_no",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "title": "Version No",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Read Admin Skill File",
+        "tags": [
+          "ChatData 技能"
+        ]
+      }
+    },
+    "/api/chatdata/admin/skills/{skill_id}/files/office-preview": {
+      "get": {
+        "description": "后台管理：渲染任一技能版本目录 Office 文件 HTML 预览（复用 OfficeCLI 引擎）。",
+        "operationId": "render_admin_skill_office_preview_api_chatdata_admin_skills__skill_id__files_office_preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "skill_id",
+            "required": true,
+            "schema": {
+              "title": "Skill Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "dir_name",
+            "required": true,
+            "schema": {
+              "title": "Dir Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "file_path",
+            "required": true,
+            "schema": {
+              "title": "File Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "version_no",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "title": "Version No",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Render Admin Skill Office Preview",
+        "tags": [
+          "ChatData 技能"
+        ]
+      }
+    },
+    "/api/chatdata/admin/skills/{skill_id}/files/raw": {
+      "get": {
+        "description": "后台管理：读取任一技能版本目录文件的原始字节（图片/PDF 在线预览，前端以 blob 方式消费）。",
+        "operationId": "read_admin_skill_file_raw_api_chatdata_admin_skills__skill_id__files_raw_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "skill_id",
+            "required": true,
+            "schema": {
+              "title": "Skill Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "dir_name",
+            "required": true,
+            "schema": {
+              "title": "Dir Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "file_path",
+            "required": true,
+            "schema": {
+              "title": "File Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "version_no",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "title": "Version No",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Binary file response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Read Admin Skill File Raw",
+        "tags": [
+          "ChatData 技能"
+        ]
+      }
+    },
+    "/api/chatdata/admin/skills/{skill_name}": {
+      "get": {
+        "description": "后台管理：只读读取任一技能详情（系统 / 插件 / 全部用户技能，含草稿与停用）。",
+        "operationId": "get_admin_skill_api_chatdata_admin_skills__skill_name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "skill_name",
+            "required": true,
+            "schema": {
+              "title": "Skill Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Get Admin Skill",
+        "tags": [
+          "ChatData 技能"
         ]
       }
     },
@@ -12604,6 +13024,45 @@
               "description": "翻页游标：只返回 sequence_no 小于该值的历史事件",
               "title": "Before Sequence"
             }
+          },
+          {
+            "description": "按完整轮次分页：返回最近 limit_turns 轮",
+            "in": "query",
+            "name": "limit_turns",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 50,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按完整轮次分页：返回最近 limit_turns 轮",
+              "title": "Limit Turns"
+            }
+          },
+          {
+            "description": "按轮次翻页游标：只返回该序号之前的轮次",
+            "in": "query",
+            "name": "before_turn_sequence",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "按轮次翻页游标：只返回该序号之前的轮次",
+              "title": "Before Turn Sequence"
+            }
           }
         ],
         "responses": {
@@ -13089,6 +13548,54 @@
         ]
       }
     },
+    "/api/chatdata/conversations/{conversation_id}/run-state": {
+      "get": {
+        "description": "读取当前会话仍在排队的追加消息与运行状态，供前端刷新后恢复展示。",
+        "operationId": "list_steer_messages_api_chatdata_conversations__conversation_id__run_state_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "List Steer Messages",
+        "tags": [
+          "ChatData 会话"
+        ]
+      }
+    },
     "/api/chatdata/conversations/{conversation_id}/runs/{run_id}/events": {
       "get": {
         "description": "重新订阅后台 Run 的可重放 SSE 事件。",
@@ -13375,6 +13882,371 @@
         ]
       }
     },
+    "/api/chatdata/conversations/{conversation_id}/subagent-tasks": {
+      "get": {
+        "description": "列出当前会话的后台子智能体任务；刷新/重连后仍可恢复任务卡。",
+        "operationId": "list_subagent_tasks_api_chatdata_conversations__conversation_id__subagent_tasks_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "List Subagent Tasks",
+        "tags": [
+          "ChatData 会话"
+        ]
+      }
+    },
+    "/api/chatdata/conversations/{conversation_id}/subagent-tasks/{task_id}": {
+      "get": {
+        "description": "读取单个后台任务的完整报告、错误与过程快照。",
+        "operationId": "get_subagent_task_api_chatdata_conversations__conversation_id__subagent_tasks__task_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Get Subagent Task",
+        "tags": [
+          "ChatData 会话"
+        ]
+      }
+    },
+    "/api/chatdata/conversations/{conversation_id}/subagent-tasks/{task_id}/cancel": {
+      "post": {
+        "description": "用户手动取消后台子智能体任务；执行节点下一次心跳停止协程。",
+        "operationId": "cancel_subagent_task_api_chatdata_conversations__conversation_id__subagent_tasks__task_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Cancel Subagent Task",
+        "tags": [
+          "ChatData 会话"
+        ]
+      }
+    },
+    "/api/chatdata/conversations/{conversation_id}/subagent-tasks/{task_id}/close-session": {
+      "post": {
+        "description": "用户关闭终态子智能体会话，释放当前主对话的子智能体额度；历史仍可查看。",
+        "operationId": "close_subagent_session_api_chatdata_conversations__conversation_id__subagent_tasks__task_id__close_session_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Close Subagent Session",
+        "tags": [
+          "ChatData 会话"
+        ]
+      }
+    },
+    "/api/chatdata/conversations/{conversation_id}/subagent-tasks/{task_id}/events": {
+      "get": {
+        "description": "订阅后台子智能体的过程消息；父 Run 结束后仍可实时查看。",
+        "operationId": "stream_subagent_task_events_api_chatdata_conversations__conversation_id__subagent_tasks__task_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Server-sent event stream"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Stream Subagent Task Events",
+        "tags": [
+          "ChatData 会话"
+        ]
+      }
+    },
+    "/api/chatdata/conversations/{conversation_id}/subagent-tasks/{task_id}/trail": {
+      "get": {
+        "description": "返回运行中任务的检查点快照与续传游标，供详情页秒开；不可用时由前端回退全量重放。",
+        "operationId": "get_subagent_task_trail_api_chatdata_conversations__conversation_id__subagent_tasks__task_id__trail_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Get Subagent Task Trail",
+        "tags": [
+          "ChatData 会话"
+        ]
+      }
+    },
     "/api/chatdata/conversations/{conversation_id}/title": {
       "post": {
         "description": "自动生成会话标题\n\nPOST /api/chatdata/conversations/{id}/title\n\n返回：\n{\n    \"status\": \"success\",\n    \"data\": {\"id\": \"...\", \"title\": \"...\"}\n}",
@@ -13491,6 +14363,54 @@
           }
         ],
         "summary": "Update Conversation Title",
+        "tags": [
+          "ChatData 会话"
+        ]
+      }
+    },
+    "/api/chatdata/conversations/{conversation_id}/token-usage": {
+      "get": {
+        "description": "按需读取会话完整上下文用量明细，避免随每次 history timeline 重复传输。",
+        "operationId": "get_conversation_token_usage_api_chatdata_conversations__conversation_id__token_usage_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Get Conversation Token Usage",
         "tags": [
           "ChatData 会话"
         ]
@@ -13712,6 +14632,62 @@
           }
         ],
         "summary": "Read Conversation Workspace File",
+        "tags": [
+          "ChatData 会话工作区文件"
+        ]
+      },
+      "put": {
+        "description": "保存会话工作区中已存在的文本文件。",
+        "operationId": "save_conversation_workspace_file_api_chatdata_conversations__conversation_id__workspace_files_content_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversationWorkspaceFileSaveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ServiceToken": []
+          }
+        ],
+        "summary": "Save Conversation Workspace File",
         "tags": [
           "ChatData 会话工作区文件"
         ]

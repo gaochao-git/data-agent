@@ -12,12 +12,15 @@ from datetime import datetime
 from uuid import uuid4
 
 from apps.chat_data_app.services.setting_service import get_runtime_setting
+from shutdown_config import RUN_SHUTDOWN_DRAIN_SECONDS
 from utils.logger import get_logger
 
 from .agent_inbox_service import AgentInboxService, AgentRunLeaseLostError, agent_inbox_service
 from .agent_run_event_service import AgentRunEventService, agent_run_event_service, format_terminal_done
 from .chat_data_stream_request import ChatDataStreamRequest
+from .executor_gate import configured_node_id, is_executor_allowed
 from .redis_event_bus import RedisEventBus
+from .subagent_task_service import subagent_task_service
 
 logger = get_logger(__name__)
 
@@ -67,6 +70,7 @@ class AgentRunRuntime:
         event_service: AgentRunEventService = agent_run_event_service,
         event_bus: RedisEventBus | None = None,
         stream_generator: Callable[..., AsyncIterator[str]] | None = None,
+        node_id: str | None = None,
     ) -> None:
         # 并发上限运行期经后台配置变量表读取（CHAT_DATA_AGENT_MAX_CONCURRENCY）：
         # _execute 每次执行前对账，无在途运行时按新值重建信号量（有在途时沿用旧的，
@@ -76,16 +80,19 @@ class AgentRunRuntime:
         self._event_service = event_service
         self._event_bus = event_bus or event_service.bus
         self._stream_generator = stream_generator
+        self._node_id = str(node_id or "").strip() or configured_node_id()
         self._semaphore = asyncio.Semaphore(self._semaphore_capacity)
         self._tasks: dict[str, asyncio.Task] = {}
         self._owned_runs: set[str] = set()
         self._poll_task: asyncio.Task | None = None
+        self._stopping = False
 
     def set_stream_generator(self, stream_generator: Callable[..., AsyncIterator[str]]) -> None:
         """由上层（handlers）在启动装配时注入 Run 流生成器，避免服务层反向 import。"""
         self._stream_generator = stream_generator
 
     async def start(self) -> None:
+        self._stopping = False
         await self._event_bus.start()
         if self._poll_task is None or self._poll_task.done():
             self._poll_task = asyncio.create_task(self._poll_pending_runs(), name="chatdata-agent-run-dispatcher")
@@ -98,6 +105,9 @@ class AgentRunRuntime:
         user_id: str,
         operator_name: str,
     ) -> None:
+        if self._stopping:
+            logger.info("ChatData Agent Run 停机中，拒绝开始新执行: run_id=%s", run_id)
+            return
         existing = self._tasks.get(run_id)
         if existing is not None and not existing.done():
             return
@@ -203,44 +213,89 @@ class AgentRunRuntime:
                     logger.warning("ChatData Run 取消发布 owner 清理失败: run_id=%s", run_id, exc_info=True)
 
     async def stop(self) -> None:
+        self._stopping = True
         if self._poll_task:
             self._poll_task.cancel()
             with suppress(asyncio.CancelledError):
                 await self._poll_task
             self._poll_task = None
         tasks = list(self._tasks.values())
+        if tasks:
+            logger.info("ChatData Agent Run 停机收口开始: tasks=%d", len(tasks))
         for task in tasks:
-            # Shutdown is not an explicit user cancellation. Leave the DB
-            # lease so another process can recover the Run after restart.
+            # 停机取消由执行任务自己收口（interrupted + done + 释放 owner）；
+            # 外部只负责发出信号并做有界等待，避免与 finally 重复发布终态。
             task.cancel("runtime_shutdown")
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            _, pending = await asyncio.wait(tasks, timeout=RUN_SHUTDOWN_DRAIN_SECONDS)
+            logger.info(
+                "ChatData Agent Run 停机收口等待结束: drained=%d pending=%d",
+                len(tasks) - len(pending),
+                len(pending),
+            )
+            if pending:
+                # 超时任务不强杀：进程即将退出，未收口 Run 由租约过期 reaper 兜底。
+                logger.warning(
+                    "ChatData Agent Run 停机收口超时，剩余任务交由租约回收: pending=%s timeout_s=%.1f",
+                    sorted(task.get_name() for task in pending),
+                    RUN_SHUTDOWN_DRAIN_SECONDS,
+                )
         self._tasks.clear()
         self._owned_runs.clear()
+        await subagent_task_service.shutdown_local_tasks()
         await self._event_bus.close()
 
     async def _poll_pending_runs(self) -> None:
         while True:
             try:
+                # Standby/不允许执行的节点不参与任何调度，包括过期 Run 回收：
+                # active 节点负责 reaper，避免非执行节点误收口 active 的 Run。
+                if not await self._is_executor_allowed():
+                    logger.debug("Agent Run 调度跳过：当前节点不在执行白名单 node_id=%s", self._node_id)
+                    await asyncio.sleep(RUN_DISPATCH_POLL_SECONDS)
+                    continue
                 await self._reap_expired_runs()
-                available_slots = self._semaphore_capacity - len(self._tasks)
-                if available_slots > 0:
-                    runnable = await self._list_runnable_runs(available_slots)
-                    for run_id in runnable:
-                        if run_id in self._tasks:
-                            continue
-                        self.submit(
-                            run_id=run_id,
-                            conversation_id="",
-                            user_id="",
-                            operator_name="",
-                        )
+                await self._reap_expired_pending_runs()
+                await self._reap_expired_subagent_tasks()
+                await self._dispatch_subagent_notifications()
+                await self._submit_runnable_runs()
                 await asyncio.sleep(RUN_DISPATCH_POLL_SECONDS)
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.error("ChatData Agent Run 调度失败", exc_info=True)
                 await asyncio.sleep(1)
+
+    async def _reap_expired_pending_runs(self) -> None:
+        expired = await self._inbox_service.reap_expired_pending_runs(limit=20)
+        if expired:
+            logger.info("已失败收口超时 pending Run: count=%d", len(expired))
+
+    async def _reap_expired_subagent_tasks(self) -> None:
+        """活动节点统一回收租约过期的后台子智能体，避免各进程重复判断。"""
+        reaped = await subagent_task_service.reap_expired_tasks(limit=20)
+        if reaped:
+            logger.info("已回收租约过期的后台子智能体任务: count=%d", reaped)
+
+    async def _dispatch_subagent_notifications(self) -> None:
+        """投递子智能体生命周期事件；wake 策略在空闲会话创建通知 Run。"""
+        dispatched = await subagent_task_service.dispatch_pending_notifications(limit=10)
+        if dispatched:
+            logger.info("已派发后台子智能体生命周期事件: count=%d", dispatched)
+
+    async def _submit_runnable_runs(self) -> None:
+        available_slots = self._semaphore_capacity - len(self._tasks)
+        if available_slots <= 0:
+            return
+        runnable = await self._list_runnable_runs(available_slots)
+        for run_id in runnable:
+            if run_id not in self._tasks:
+                self.submit(
+                    run_id=run_id,
+                    conversation_id="",
+                    user_id="",
+                    operator_name="",
+                )
 
     async def _reap_expired_runs(self) -> None:
         """后台收口 Worker 崩溃留下的过期 Run，并结束其 SSE。"""
@@ -277,8 +332,7 @@ class AgentRunRuntime:
                     user_query=str(context.get("query") or ""),
                     datasource_id=context.get("datasource_id"),
                     user_id=prepared["user_id"],
-                    username=prepared.get("operator_name") or prepared["user_id"],
-                    member_datasource_ids=context.get("member_datasource_ids") or [],
+                    username=str(prepared.get("operator_name") or "").strip(),
                     # 请求到达墙钟：优先取 completion/claim 写入 Run 行的盖章
                     # （用户气泡对齐口径）；缺失（定时任务/continuation）回退
                     # 派发时刻，保持原行为。
@@ -288,6 +342,7 @@ class AgentRunRuntime:
                     model_id=context.get("model_id"),
                     file_selections=context.get("file_selections"),
                     quoted_snippets=context.get("quoted_snippets"),
+                    annotations=context.get("annotations"),
                     enable_thinking=context.get("enable_thinking"),
                     thinking_effort=context.get("thinking_effort"),
                     skill_names=context.get("skill_names") or [],
@@ -315,11 +370,11 @@ class AgentRunRuntime:
             return None
         state.conversation_id = prepared["conversation_id"]
         state.user_id = prepared["user_id"]
-        state.operator_name = prepared.get("operator_name") or state.operator_name or state.user_id
+        state.operator_name = str(prepared.get("operator_name") or "").strip()
         try:
             await self._event_service.claim_owner(state.run_id, prepared["owner_token"])
         except Exception:
-            # prepare 已把 Run 行置为 ACTIVE（租约 120s）；claim_owner 失败
+            # prepare 已把 Run 行置为 ACTIVE（租约 CHAT_DATA_RUN_LEASE_SECONDS，默认 30s）；claim_owner 失败
             # （典型为 Redis 不可达）若不收口，行会作为无主 ACTIVE 僵尸挂到
             # 租约过期被 reaper 回收，期间 SSE 一直显示「进行中」假状态。
             # finish_run("failed") 断言 DB owner（prepare 已写入）并重排队消息，
@@ -409,6 +464,38 @@ class AgentRunRuntime:
             state.terminal_payload = format_terminal_done(finished_status)
             state.terminal_ready = True
 
+    async def _finalize_interrupted_run(self, state: _RunExecutionState, prepared: dict | None) -> None:
+        """进程正常停机：把未完成 Run 收口为 interrupted，并让其正常发布 done。"""
+        if prepared is None:
+            return
+        try:
+            finished_status = await self._inbox_service.finish_run(
+                state.run_id,
+                "interrupted",
+                state.user_id,
+                state.operator_name,
+                prepared["owner_token"],
+            )
+        except AgentRunLeaseLostError:
+            logger.info("ChatData Agent Run 停机收口时租约已丢失: run_id=%s", state.run_id)
+            return
+        except Exception:
+            logger.warning("ChatData Agent Run 停机收口失败: run_id=%s", state.run_id, exc_info=True)
+            return
+        if finished_status:
+            logger.info("ChatData Agent Run 停机收口: run_id=%s status=%s", state.run_id, finished_status)
+            state.terminal_payload = format_terminal_done(finished_status)
+            state.terminal_ready = True
+
+    async def _finalize_cancellation(
+        self, state: _RunExecutionState, prepared: dict | None, exc: asyncio.CancelledError
+    ) -> None:
+        """按取消原因收口：用户停止落 cancelled，进程停机落 interrupted。"""
+        if exc.args and exc.args[0] == "runtime_shutdown":
+            await self._finalize_interrupted_run(state, prepared)
+            return
+        await self._finalize_cancelled_run(state, prepared, exc)
+
     async def _finalize_failed_run(self, state: _RunExecutionState, prepared: dict) -> None:
         try:
             finished_status = await self._inbox_service.finish_run(
@@ -482,6 +569,10 @@ class AgentRunRuntime:
         self._submit_chained_run(state)
         self._owned_runs.discard(state.run_id)
 
+    async def _is_executor_allowed(self) -> bool:
+        """执行节点准入统一委托给 executor_gate，保证与定时任务同一判断。"""
+        return await is_executor_allowed(self._node_id, setting_reader=get_runtime_setting)
+
     async def _execute(
         self,
         *,
@@ -490,6 +581,14 @@ class AgentRunRuntime:
         user_id: str,
         operator_name: str,
     ) -> None:
+        # 节点白名单只拦新的 claim；已运行 Run 不受名单变更影响。
+        if not await self._is_executor_allowed():
+            logger.info(
+                "Agent Run 跳过：当前节点不在执行白名单 run_id=%s node_id=%s",
+                run_id,
+                self._node_id,
+            )
+            return
         # TTFT 观测：run_dispatch = submit → 本任务实际开跑（事件循环调度 +
         # 下方运行时设置读取 + 并发闸排队）；claim_pending_run = 领取的 DB/Redis 耗时。
         # 两段此前零日志，是「HTTP 入口 → graph 启动」2~6s 波动的嫌疑段。
@@ -532,7 +631,7 @@ class AgentRunRuntime:
                 state.terminal_ready = True
             except asyncio.CancelledError as exc:
                 prepared = state.cancelled_prepared or prepared
-                await self._finalize_cancelled_run(state, prepared, exc)
+                await self._finalize_cancellation(state, prepared, exc)
                 raise
             except Exception as exc:
                 if isinstance(exc, AgentRunLeaseLostError):

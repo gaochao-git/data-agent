@@ -38,12 +38,12 @@ PORT=5002 python server/main.py
 也可以使用 uvicorn 单进程运行：
 
 ```bash
-uvicorn main:app --app-dir server --host 0.0.0.0 --port 5001
+uvicorn main:app --app-dir server --host 0.0.0.0 --port 5001 --timeout-graceful-shutdown 5
 ```
 
 ## 生产运行
 
-生产环境推荐使用 Gunicorn 管理多进程，UvicornWorker 负责运行 FastAPI ASGI 应用：
+生产环境推荐使用 Gunicorn 管理多进程，`ChatDataUvicornWorker` 负责运行 FastAPI ASGI 应用：
 
 ```bash
 gunicorn main:app -c server/gunicorn.conf.py
@@ -56,6 +56,23 @@ gunicorn main:app -c server/gunicorn.conf.py
 - `GUNICORN_TIMEOUT`：worker 超时时间，默认 `900` 秒，适配智能体、SQL 和沙箱长请求
 - `GUNICORN_GRACEFUL_TIMEOUT`：优雅退出等待时间，默认 `30` 秒
 - `GUNICORN_KEEPALIVE`：keepalive 时间，默认 `5` 秒
+
+`ChatDataUvicornWorker` 会把 SSE 请求任务的排空上限设为 `5` 秒。uvicorn 的停机顺序是
+「等待请求结束 → lifespan shutdown」；没有这个上限时，长连接会让进程一直等到 gunicorn
+宽限期结束并被 SIGKILL，Agent Run 的 `interrupted` 收口不会执行。因此
+`GUNICORN_GRACEFUL_TIMEOUT` 必须明显大于「请求排空 + Run 收口」的合计时间。
+这两段预算统一在 `server/shutdown_config.py` 维护，Gunicorn worker、单进程
+`main.py` 与 Run Runtime 共用，避免三处各自硬编码。
+
+多机房单活执行：
+
+```text
+A/B 同一时刻只有一个 Active 机房运行智能体
+C 永不接智能体
+Nginx 只把智能体请求转发到 Active 机房
+只有 Active 机房的节点出现在 CHAT_DATA_AGENT_EXECUTOR_NODES
+Standby 节点不轮询 pending、不回收 Run、不调定时任务
+```
 
 开发热更新仍使用 `python main.py` 和 `FASTAPI_RELOAD=true`；不要在热更新模式下使用多 worker。
 
@@ -126,13 +143,16 @@ kill -9 $(lsof -ti :5001)
 - `LOG_LEVEL` / `LOG_DIR` / `LOG_APP_NAME`：日志配置，默认按应用名分为应用日志、访问日志和告警日志；日志 IDC 使用启动时识别出的环境名
 - `SERVICE_AUTH_TOKEN`：服务间调用认证 Token，存放 SM4 加密后的密文
 - `DATABASE_URL` 或相关 MySQL 配置：业务库连接
-- `CHAT_DATA_HOME`：ChatData 应用**唯一的数据根目录**（**必填**，禁止回退到其它变量推导）；会话工作区、卸载的查询结果、系统技能（`skills/system`）、用户技能（`skills/user`）、SQLite 检查点（`checkpoints.db`）均派生自此
+- `CHAT_DATA_HOME`：ChatData 应用**共享持久数据根**（**必填**，禁止回退到其它变量推导）；会话工作区、用户文件、用户技能（`skills/user`）和插件派生自此。系统技能不落本目录，运行时直读代码包 `apps/chat_data_app/agent/skills/`；该根可放共享存储（JuiceFS/GlusterFS）。
+- `CHAT_DATA_NODE_ID`：当前执行单元名；同一机房 3 节点可共用同一个机房名（执行资格一致时），需要单节点隔离时再配唯一节点名；不配置时白名单非空则本节点不执行 Agent Run
+- `CHAT_DATA_AGENT_EXECUTOR_NODES`：允许执行 Agent Run 的节点名列表（逗号分隔）；为空表示不限制；可在后台运行配置动态修改，生效有约 30 秒缓存；读取失败 fail-close
+- `CHAT_DATA_PENDING_RUN_MAX_AGE_SECONDS`：pending Run 最长等待执行时间（秒），默认 `300`；超时置 `failed` 并取消未消费消息，避免旧请求被延迟领取执行
 - `CHAT_DATA_MODELS_FILE`：**已废弃**，服务端不再读取。模型清单唯一真值是 DB 表 `chat_data_model_registry`（大模型管理页维护），表为空即空清单，不回源任何文件自动导入，模型直接在管理页添加（可先用「探测」拉上游可用模型）。旧变量 `CHAT_DATA_MODEL` 已废弃，残留会导致启动报错；`CHAT_DATA_API_KEY` / `CHAT_DATA_BASE_URL` 同样废弃
 - 模型注册键（`model_key`）：服务端生成 `{请求名slug}-{8位随机hex}`（如 `deepseek-v4-flash-3f2a9c1d`），URL 安全、编辑不改变；管理端写接口用 body/query 传键（`PUT /admin/models`、`PATCH /admin/models/enabled|default`、`DELETE /admin/models?model_key=`），旧路径接口保留一个发布周期兼容；存量含 `#`/`/` 的老注册键继续可用（入口自动还原网关重复编码）
 - `CHAT_DATA_HTTP_*`：HTTP 模式下对接外部 Hive/查询服务，其中 `CHAT_DATA_HTTP_AUTH_TOKEN` 存放 SM4 加密后的密文
 - `OPENSANDBOX_API_KEY`：智能分析 OpenSandbox API Key，存放 SM4 加密后的密文；留空表示不传 API Key
 - `CHATDATA_ROW_LIMIT`：查询返回行数限制
-- `CHAT_DATA_TOOL_RESULT_OFFLOAD_SIZE`：普通工具结果卸载阈值，默认 32000 字符；查询结果统一保存到会话 `outputs/query_result/<id>.json`，普通工具大结果保存到 `outputs/.tool-offload/<id>.txt|json`
+- `CHAT_DATA_TOOL_RESULT_OFFLOAD_SIZE`：普通工具结果卸载阈值，默认 32000 字符；查询结果统一保存到会话 `workspace/.system/query_result/<id>.json`，普通工具大结果保存到 `workspace/.system/tool-offload/<id>.txt|json`
 - `CHAT_DATA_FILE_READ_MAX_CHARS`：`file_read` 单次返回给模型的正文上限，默认 25000 字符；按请求源行分页，单行最多返回 500 字符
 - `CHAT_DATA_MAX_UPLOAD_SIZE_MB`：单文件上传大小上限（MB，正整数），默认 `50`；流式边读边判，超限即拒绝并清理临时文件。前端另有一份 50MB 的客户端预检（`AnalysisConversation.vue` 的 `MAX_FILE_SIZE`），调大本值时须同步前端，否则大文件会在前端被拦下
 - `CHAT_DATA_MAX_IMAGE_SIZE_MB`：单张图片进入模型上下文的大小上限（MB，正整数），默认 `5`；同时约束 `read_image` 工具与视觉注入中间件
@@ -141,13 +161,26 @@ kill -9 $(lsof -ti :5001)
 - `CHAT_DATA_CONTEXT_COMPRESSION_TRIGGER_RATIO`：输入达到模型上下文窗口的该比例时自动压缩，默认 `0.70`，必须大于 `0` 且不超过 `0.95`；非法配置会阻止服务启动，实际触发点同时受 `CHAT_DATA_OUTPUT_MAX_TOKENS` 输出预留和 `95%` 输入安全水位约束
 - `CHAT_DATA_CONTEXT_COMPRESSION_SUMMARY_OUTPUT_MAX_TOKENS`：上下文压缩摘要调用的最大输出 token，默认 `2000`；独立于主模型调用的 `CHAT_DATA_OUTPUT_MAX_TOKENS`
 - `apache-ossie`：语义模型物料化依赖。Ossie 尚未发布 PyPI 正式版，requirements 使用 `wheels/apache_ossie-0.2.0.dev0-py3-none-any.whl` 离线 wheel（由官方仓库固定 commit `7c03c46eae6c9946f50d9aa6c36918cdfb28f540`（2026-10-10 main）的 `python/` 子目录构建：根形状为单模型平铺、类名 `Ossie*`、`extra=forbid`、version Literal 钉死），内网机器无需访问 GitHub 即可安装。**注意版本号跨越破坏性变更未变（仍是 0.2.0.dev0），文件名相同但 schema 不同，替换 wheel 后必须解包验证内容**。升级时按 requirements.txt 内注释从新 commit 重建 wheel 替换旧文件；不能使用开发机本地路径或静默降级。
-- `numpy` / `onnxruntime`：`markitdown` → `magika` 的传递依赖，同样以 `wheels/` 离线 wheel 提供，因为内网 PyPI 镜像（pypi.nucc.com）下载这两个包会超时。二者版本还受目标机器 CPU 约束：**numpy 固定 1.26.4**，因为 numpy 2.0+ 把 manylinux wheel 基线提升到 `x86_V2`（AVX2），不支持 AVX2 的机器导入即报 `Numpy was built with baseline optimizations: (x86_V2) but the machine doesn't support (x86_V2)`；1.26.4 的 `manylinux_2_17` wheel 仅需 SSE2。`onnxruntime` 固定 1.23.2（与开发机验证过的 `magika 0.6.3` / `markitdown 0.1.7` 组合一致），它只提供 `manylinux_2_28+` 变体，故宿主机 glibc 需 ≥ 2.28。两个 wheel 均为 Linux x86_64 / CPython 3.12，换平台按 requirements.txt 内注释用 `pip download --platform` 重新生成。
+- `numpy` / `onnxruntime`：`markitdown` → `magika` 的传递依赖，同样以 `wheels/` 离线 wheel 提供，因为内网 PyPI 镜像（pypi.xxx.com）下载这两个包会超时。二者版本还受目标机器 CPU 约束：**numpy 固定 1.26.4**，因为 numpy 2.0+ 把 manylinux wheel 基线提升到 `x86_V2`（AVX2），不支持 AVX2 的机器导入即报 `Numpy was built with baseline optimizations: (x86_V2) but the machine doesn't support (x86_V2)`；1.26.4 的 `manylinux_2_17` wheel 仅需 SSE2。`onnxruntime` 固定 1.23.2（与开发机验证过的 `magika 0.6.3` / `markitdown 0.1.7` 组合一致），它只提供 `manylinux_2_28+` 变体，故宿主机 glibc 需 ≥ 2.28。两个 wheel 均为 Linux x86_64 / CPython 3.12，换平台按 requirements.txt 内注释用 `pip download --platform` 重新生成。
 
 ## 运行时存储
 
 `CHAT_DATA_HOME` 是应用侧唯一的运行时文件根。local 直接在该目录读写；sandbox 不访问该目录，也不使用宿主机目录挂载，而是通过 OpenSandbox Files API 上传会话快照，并在操作完成后把允许同步的 `workspace/`、`outputs/` 文件下载回应用侧。多应用实例之间的持久化存储和并发协调由部署层负责，代码不实现跨节点文件同步。
 
-会话文件位于 `threads/{user_id}/{创建日期YYYY-MM-DD}/{conversation_id}/user-data/`（按会话创建日期归档，路径统一由 `utils.storage_paths.conversation_thread_dir` 拼装），系统技能位于 `skills/system/`，用户技能位于 `skills/user/{user_id}/<skill-name>/versions/vN/`。每个会话在创建/首次运行时构建技能快照 `threads/{user_id}/{创建日期YYYY-MM-DD}/{conversation_id}/runtime-skills/`（系统技能 + 自己已发布 + 他人 global 已发布），会话内冻结不变。sandbox 运行时通过 Files API 上传该快照到 `/mnt/skills`，并上传 `user-data/` 到 `/mnt/user-data`；技能在沙箱内只读，工具对 `workspace/`、`outputs/` 的变更在操作完成后下载回应用侧。大工具结果统一位于会话 `outputs/.tool-offload/`：查询结果保存为 `<id>.json`，其他工具结果保存为 `<id>.txt`，虚拟路径为 `/mnt/user-data/outputs/.tool-offload/<id>.<suffix>`。该目录可由 Agent 的 `file_read` 分页读取或 Bash 处理，但前端工作区列表、产物展示、技能导入和 `file_edit` 均忽略或拒绝它。系统技能由发布流程将代码包 `apps/chat_data_app/agent/skills/` 下的技能目录复制到 `skills/system/`，应用运行时只读且不写入技能数据库；用户技能继续由数据库元数据和版本目录管理。前端始终携带会话 ID 请求查询结果，后端据此校验当前用户归属并按固定路径读取。生产环境的 LangGraph checkpoint 使用 MySQL。MinIO 不在工作区、技能或查询结果的运行时链路中。
+会话文件位于 `threads/{user_id}/{创建日期YYYY-MM-DD}/{conversation_id}/user-data/`（按会话创建日期归档，路径统一由 `utils.storage_paths.conversation_thread_dir` 拼装），系统技能直接读代码包 `apps/chat_data_app/agent/skills/`（不落数据根），用户技能位于 `skills/user/{user_id}/<skill-name>/versions/vN/`。技能快照按用户落到 `CHAT_DATA_HOME/threads/{user_id}/runtime/skills/`（系统技能 + 自己已发布 + 他人 global 已发布），同一用户跨会话共享一份最新快照；每次 Run 首次解析后固定目录，技能变更下一轮覆盖更新。语义文件按用户 + 数据源组落到 `CHAT_DATA_HOME/threads/{user_id}/runtime/semantic/{datasource_id}/`（每个用户每组保留最新一份），会话 ref 放在 `threads/{user_id}/{date}/{conversation_id}/semantic-ref.json`；二者都是派生数据，可重建。sandbox 运行时通过 Files API 上传该快照到 `/mnt/skills`，并上传 `user-data/` 到 `/mnt/user-data`；技能在沙箱内只读，工具对 `workspace/`、`outputs/` 的变更在操作完成后下载回应用侧。大工具结果统一位于会话 `workspace/.system/tool-offload/`：查询结果保存为 `<id>.json`，其他工具结果保存为 `<id>.txt`，虚拟路径为 `/mnt/user-data/workspace/.system/tool-offload/<id>.<suffix>`。该目录可由 Agent 的 `file_read` 分页读取或 Bash 处理，但前端工作区列表、产物展示、技能导入和 `file_edit` 均忽略或拒绝它。系统技能直读代码包 `apps/chat_data_app/agent/skills/`（发布流程不再复制副本，`CHAT_DATA_HOME/skills/system` 已废弃），应用运行时只读且不写入技能数据库；用户技能继续由数据库元数据和版本目录管理。前端始终携带会话 ID 请求查询结果，后端据此校验当前用户归属并按固定路径读取。生产环境的 LangGraph checkpoint 使用 MySQL。MinIO 不在工作区、技能或查询结果的运行时链路中。
+
+## 共享运行目录
+
+`runtime/skills`、`runtime/semantic` 位于共享 `CHAT_DATA_HOME/threads/{user_id}/runtime/`。
+写入前使用现有 Redis 配置（`CHAT_DATA_REDIS_SENTINELS` 等）获取跨节点租约；Redis 未配置时降级本地锁，单机可用但多节点不保证互斥。
+
+共享 runtime 清理使用：
+
+```bash
+python scripts/cleanup_shared_runtime.py --max-age-days 7 --dry-run
+```
+
+该脚本只清理未过期 ref 保护之外的 semantic 和 `skills.building-*`/`skills.old-*` 临时目录，不删除会话 `user-data/`、技能管理源或插件。
 
 ## 权限边界
 

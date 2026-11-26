@@ -34,13 +34,17 @@ def _stub_datasource_binding(monkeypatch):
 
     monkeypatch.setattr(agent_run_support, "prematerialize_enabled_semantic_models", noop_prematerialize)
 
+    # 数据源组智能问数说明注入（2026-11-10 恢复）：桩为空串，避免用例触达真实数据源 DAO
+    class _StubPromptDatasourceManager:
+        async def get_query_context(self, _datasource_id):
+            return ""
+
+    monkeypatch.setattr(agent_stream, "get_datasource_manager", lambda: _StubPromptDatasourceManager())
+
 
 def _semantic_context_from_request(**kwargs) -> SemanticConversationContext:
     datasource_id = str(kwargs.get("datasource_id") or "").strip() or None
     semantic_config_id = str(kwargs.get("semantic_config_id") or "").strip() or None
-    selected_member_ids = list(
-        dict.fromkeys(str(item).strip() for item in kwargs.get("member_datasource_ids") or [] if str(item).strip())
-    )
     semantic_config = (
         {"id": semantic_config_id, "name": semantic_config_id, "metrics": [], "dimensions": []}
         if semantic_config_id
@@ -51,10 +55,6 @@ def _semantic_context_from_request(**kwargs) -> SemanticConversationContext:
         datasource_meta={"query_context": ""} if datasource_id else None,
         semantic_config_id=semantic_config_id,
         semantic_config=semantic_config,
-        execution_targets=[],
-        available_member_datasource_ids=selected_member_ids,
-        matched_member_datasource_ids=[],
-        selected_member_datasource_ids=selected_member_ids,
     )
 
 
@@ -539,7 +539,7 @@ def test_agent_sse_stream_adapter_alarm_context_carries_user_id(monkeypatch):
         initial_state={"messages": []},
         config={"configurable": {"thread_id": "conv_user", "checkpoint_ns": ""}},
         debug_label="AI Content from model",
-        user_id="10001",
+        run_context={"user_id": "10001"},
     )
 
     adapter._emit_first_token_timeout_if_needed(agent_stream.time.perf_counter() - 61)
@@ -1158,7 +1158,7 @@ async def test_generate_chat_data_stream_initial_state_uses_context_groups(monke
 
     assert "query answer" in "".join(chunks)
     assert [message.content for message in graph.initial_state["messages"]] == ["查订单"]
-    assert graph.initial_state["execution_context"]["datasource_id"] == "ds_a"
+    assert "execution_context" not in graph.initial_state
     assert "prompt_context" not in graph.initial_state
     assert "tables_ddl_info" not in graph.initial_state
     assert "loaded_table_names" not in graph.initial_state
@@ -1324,7 +1324,10 @@ async def test_generate_chat_data_stream_tool_call_duplicate_missing_name_and_em
     text = "".join(chunks)
 
     duplicate_blocks = [block for block in text.split("\n\n") if '"tool_call_id": "tc_dup"' in block]
-    assert [sse_event_name(block) for block in duplicate_blocks] == ["tool_started", "tool"]
+    lifecycle_events = [
+        sse_event_name(block) for block in duplicate_blocks if sse_event_name(block) != "tool_args_delta"
+    ]
+    assert lifecycle_events == ["tool_started", "tool"]
     assert "fresh done" in text
     assert "message_end" in text
 

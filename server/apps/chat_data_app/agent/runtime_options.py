@@ -5,7 +5,7 @@
 - ``workspace_backend``: ``local`` 使用受限的本地会话目录；``sandbox`` 使用 OpenSandbox。
 - 工具启停由 ``tools/registry.py`` 的 ``ToolDefinition.enabled`` 决定。
 - ``explore_subagent_enabled``: 注册 ``explore`` 子智能体（只读事实收集）。
-- ``plan_subagent_enabled``: 注册 ``plan`` 子智能体（统一规划，产出计划文件）。
+- ``general_subagent_enabled``: 注册 ``general`` 子智能体（可读写执行，产出交付物）。
 - 任一子智能体启用即注册 ``task`` 工具，允许主智能体把长任务派发给隔离上下文的
   子智能体（见 ``middleware/subagents.py`` 与 ``data_agent.build_subagent_middleware``）。
 """
@@ -22,7 +22,7 @@ class AgentRuntimeOptions:
 
     workspace_backend: WorkspaceBackend = "local"
     explore_subagent_enabled: bool = False
-    plan_subagent_enabled: bool = False
+    general_subagent_enabled: bool = False
 
     def __post_init__(self) -> None:
         if self.workspace_backend not in ("local", "sandbox"):
@@ -33,14 +33,14 @@ def get_chat_data_default_runtime_options() -> AgentRuntimeOptions:
     """从环境变量读取系统默认运行选项。"""
     from ..services.runtime_config import (
         CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED,
-        CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED,
+        CHAT_DATA_DEFAULT_GENERAL_SUBAGENT_ENABLED,
         CHAT_DATA_DEFAULT_WORKSPACE_BACKEND,
     )
 
     return AgentRuntimeOptions(
         workspace_backend=CHAT_DATA_DEFAULT_WORKSPACE_BACKEND,
         explore_subagent_enabled=CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED,
-        plan_subagent_enabled=CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED,
+        general_subagent_enabled=CHAT_DATA_DEFAULT_GENERAL_SUBAGENT_ENABLED,
     )
 
 
@@ -48,7 +48,7 @@ def resolve_agent_runtime_options(
     *,
     user_id: str | None = None,
     explore_subagent_enabled: bool | None = None,
-    plan_subagent_enabled: bool | None = None,
+    general_subagent_enabled: bool | None = None,
 ) -> AgentRuntimeOptions:
     """解析最终运行选项。
 
@@ -64,16 +64,16 @@ def resolve_agent_runtime_options(
     base = get_chat_data_default_runtime_options()
     if explore_subagent_enabled is not None:
         base = replace(base, explore_subagent_enabled=explore_subagent_enabled)
-    if plan_subagent_enabled is not None:
-        base = replace(base, plan_subagent_enabled=plan_subagent_enabled)
+    if general_subagent_enabled is not None:
+        base = replace(base, general_subagent_enabled=general_subagent_enabled)
     return replace(
         base,
         explore_subagent_enabled=explore_subagent_enabled
         if explore_subagent_enabled is not None
         else base.explore_subagent_enabled,
-        plan_subagent_enabled=plan_subagent_enabled
-        if plan_subagent_enabled is not None
-        else base.plan_subagent_enabled,
+        general_subagent_enabled=general_subagent_enabled
+        if general_subagent_enabled is not None
+        else base.general_subagent_enabled,
     )
 
 
@@ -87,5 +87,5 @@ async def get_subagent_hot_defaults() -> dict:
 
     return {
         "explore_subagent_enabled": bool(await get_runtime_setting("CHAT_DATA_DEFAULT_EXPLORE_SUBAGENT_ENABLED")),
-        "plan_subagent_enabled": bool(await get_runtime_setting("CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED")),
+        "general_subagent_enabled": bool(await get_runtime_setting("CHAT_DATA_DEFAULT_GENERAL_SUBAGENT_ENABLED")),
     }

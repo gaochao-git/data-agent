@@ -67,9 +67,12 @@ def create_context_usage_middleware(
     state_schema: Any | None = None,
     sandbox_renewal: Callable[[], Awaitable[None]] | None = None,
     name: str = "ContextUsageMiddleware",
-    store_full_usage: bool = False,
 ) -> Any:
-    """创建统一的上下文计量与 token usage middleware。"""
+    """创建统一的上下文计量与 token usage middleware。
+
+    state 只写紧凑统计，完整 breakdown 通过 custom ``token_usage`` 事件输出。
+    两者混用会让每个 checkpoint 重复保存 prompt、消息正文和工具 schema。
+    """
     records: list[dict[str, Any]] = []
     model_id, tools, context_request_budget = _resolve_usage_runtime(
         model_id=model_id,
@@ -162,7 +165,7 @@ def create_context_usage_middleware(
         await _renew_sandbox_if_configured(sandbox_renewal)
         return ExtendedModelResponse(
             model_response=_ensure_model_response(response),
-            command=Command(update={"token_usage": _state_usage_payload(usage, store_full_usage)}),
+            command=Command(update={"token_usage": _state_usage_payload(usage)}),
         )
 
     def get_context_usage() -> dict[str, Any] | None:
@@ -173,9 +176,9 @@ def create_context_usage_middleware(
     return context_usage_middleware
 
 
-def _state_usage_payload(usage: dict[str, Any] | None, store_full_usage: bool) -> dict[str, Any] | None:
-    """写回 state 的 usage：主图压缩体积，子图保留明细（由 updates 捕获）。"""
-    return sanitize_context_usage_for_response(usage) if store_full_usage else compact_token_usage_for_state(usage)
+def _state_usage_payload(usage: dict[str, Any] | None) -> dict[str, Any] | None:
+    """写回 state 的 usage 只保留统计值；完整明细不得进入 checkpoint。"""
+    return compact_token_usage_for_state(usage)
 
 
 def create_request_context_usage_middleware(
@@ -246,8 +249,10 @@ _STATE_USAGE_FIELDS = (
     "estimated",
     "current_cached_input_tokens",
     "current_actual_input_tokens",
+    "actual_input_calls",
     "cumulative_cached_input_tokens",
     "cumulative_actual_input_tokens",
+    "input_tokens_source",
     "current_cache_hit_rate",
     "cumulative_cache_hit_rate",
 )
@@ -494,6 +499,7 @@ def build_usage_from_llm_calls(calls: list[dict[str, Any]], budget: ContextBudge
             "breakdown": list(current_call.get("breakdown") or []),
         }
     )
+    _add_actual_input_usage(payload, calls, current_call)
     _add_cached_input_usage(payload, calls, current_call)
     return payload
 
@@ -745,7 +751,6 @@ def _add_cached_input_usage(
             scope="current",
         )
         payload["current_cached_input_tokens"] = current_cached_tokens
-        payload["current_actual_input_tokens"] = current_actual_input_tokens
         _add_cache_hit_rate(
             payload,
             "current_cache_hit_rate",
@@ -769,7 +774,6 @@ def _add_cached_input_usage(
         )
         cumulative_actual_input_tokens += actual_input_tokens
     payload["cumulative_cached_input_tokens"] = cumulative_cached_tokens
-    payload["cumulative_actual_input_tokens"] = cumulative_actual_input_tokens
     _add_cache_hit_rate(
         payload,
         "cumulative_cache_hit_rate",
@@ -777,6 +781,33 @@ def _add_cached_input_usage(
         cumulative_actual_input_tokens,
         has_reported_input=cumulative_actual_input_tokens > 0,
     )
+
+
+def _add_actual_input_usage(
+    payload: dict[str, Any],
+    calls: list[dict[str, Any]],
+    current_call: dict[str, Any],
+) -> None:
+    """暴露 provider 实际输入 token；全部调用都有实际值时才可作为展示口径。
+
+    实际输入累计不能依赖缓存字段：不支持缓存上报的 provider 同样会返回
+    ``usage_metadata.input_tokens``。``input_tokens_source`` 明确标记实际值是否
+    覆盖整轮调用，调用方据此在“实际值”和上下文估算值之间选择，避免部分调用
+    缺少 usage 时静默少算。
+    """
+    current_actual = _optional_non_negative_int(current_call.get("actual_input_tokens"))
+    if current_actual is not None:
+        payload["current_actual_input_tokens"] = current_actual
+
+    actual_calls = [call for call in calls if _optional_non_negative_int(call.get("actual_input_tokens")) is not None]
+    if not actual_calls:
+        payload["input_tokens_source"] = "estimated"
+        return
+    payload["actual_input_calls"] = len(actual_calls)
+    payload["cumulative_actual_input_tokens"] = sum(
+        _optional_non_negative_int(call.get("actual_input_tokens")) or 0 for call in actual_calls
+    )
+    payload["input_tokens_source"] = "actual" if len(actual_calls) == len(calls) else "estimated"
 
 
 def _add_cache_hit_rate(
@@ -957,3 +988,40 @@ def _message_role(message: BaseMessage) -> str:
     if isinstance(message, ToolMessage):
         return "tool"
     return "message"
+
+
+def _usage_aux_stats(usage: Any | None, *, model_name: str | None = None) -> dict[str, Any]:
+    """从 usage 提取辅助统计字段：输入总 token、缓存命中与模型名；缺失时省略不硬凑。
+
+    model_name：adapter 在 sanitize 前从 llm_calls 提取的最后一次调用模型名，
+    显式传入优先——收口时的 usage 可能已被 sanitize（llm_calls 剥离）。
+    缓存命中：cumulative_cached_input_tokens / cumulative_cache_hit_rate 由
+    context_usage 侧按模型实际上报聚合（未上报缓存信息的模型不产出，与
+    ConversationTokenUsage 面板的「模型缓存」累计口径同源）。
+    """
+    if not isinstance(usage, dict):
+        return {}
+    aux: dict[str, Any] = {}
+    # 输入总 token：provider 实际值覆盖本轮全部调用时用实际值；部分调用缺少
+    # usage 时回退上下文估算，避免把“已上报部分”误当成完整账单。
+    actual_input_tokens = int(usage.get("cumulative_actual_input_tokens") or 0)
+    use_actual_input = usage.get("input_tokens_source") == "actual" and actual_input_tokens > 0
+    input_tokens = (
+        actual_input_tokens
+        if use_actual_input
+        else int(usage.get("cumulative_input_tokens") or usage.get("input_tokens") or 0)
+    )
+    if input_tokens > 0:
+        aux["input_tokens"] = input_tokens
+    # 缓存命中：本轮全部模型调用的缓存输入累计（命中率随行，仅在输入可报时存在）。
+    cached_input_tokens = int(usage.get("cumulative_cached_input_tokens") or 0)
+    if cached_input_tokens > 0:
+        aux["cached_input_tokens"] = cached_input_tokens
+        cache_hit_rate = usage.get("cumulative_cache_hit_rate")
+        if isinstance(cache_hit_rate, (int, float)) and cache_hit_rate > 0:
+            aux["cache_hit_rate"] = round(float(cache_hit_rate), 1)
+    # 模型名：多工具来回时以最终回复的调用为准。
+    resolved_model_name = model_name or latest_model_name_from_usage(usage)
+    if resolved_model_name:
+        aux["model"] = resolved_model_name
+    return aux

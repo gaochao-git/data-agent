@@ -75,19 +75,22 @@ def merge_string_names(
     return merged
 
 
-class ExecutionContext(TypedDict, total=False):
-    """工具执行所需的数据源和执行对象范围。"""
-
-    datasource_id: str | None
-    available_member_datasource_ids: list[str]
-    matched_member_datasource_ids: list[str]
-
-
 class ConversationWorkspaceContext(TypedDict, total=False):
     """当前会话工作区；只保存可序列化的配置。"""
 
     workspace_root: str
     workspace_backend: str
+
+
+class ChatDataRunContext(TypedDict, total=False):
+    """单次 run 的只读运行上下文（不进 checkpoint）。
+
+    身份类信息由调用方在 invoke 时通过 ``context=`` 注入，工具经
+    ``ToolRuntime`` 读取；state 不承载身份，也没有兜底字段。
+    """
+
+    user_id: str
+    operator_name: str
 
 
 def delta_messages_reducer(
@@ -137,10 +140,7 @@ class ChatDataAgentState(AgentState, total=False):
             DeltaChannel(reducer=delta_messages_reducer, snapshot_frequency=25),
         ]
     ]
-    user_id: str | None
-    operator_name: str | None
     conversation_id: str | None
-    execution_context: ExecutionContext
     token_usage: dict[str, Any] | None
     context_compression: dict[str, Any] | None
     context_summary: str | None

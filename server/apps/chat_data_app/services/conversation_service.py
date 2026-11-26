@@ -5,12 +5,14 @@
 使用 SQLAlchemy 统一管理业务数据库操作
 """
 
+import asyncio
 import base64
 import binascii
 import builtins
 import json
 import re
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any
 
@@ -34,6 +36,10 @@ conversation_dao = ConversationDao(session_context=lambda: get_session())
 PINNED_GROUP_KEY = "system:pinned"
 UNCLASSIFIED_GROUP_KEY = "system:unclassified"
 DATASOURCE_GROUP_PREFIX = "datasource:"
+TITLE_PLACEHOLDERS = ("", "新会话", "未命名会话")
+TITLE_GENERATION_TIMEOUT_SECONDS = 45.0
+TITLE_GENERATION_RETRY_DELAY_SECONDS = 1.0
+_TITLE_TASKS: dict[str, asyncio.Task[None]] = {}
 
 
 # ============ 内部函数 ============
@@ -53,8 +59,16 @@ def _llm_model_id(llm: Any) -> str:
     return str(getattr(llm, "model_name", None) or getattr(llm, "model", None) or "unknown")
 
 
-def _format_thread(t: UserThread, run_status: str | None = None) -> dict[str, Any]:
-    """转换会话列表返回结构"""
+def _is_title_placeholder(title: str | None) -> bool:
+    return title is None or str(title).strip() in TITLE_PLACEHOLDERS
+
+
+def _format_thread(
+    t: UserThread,
+    run_status: str | None = None,
+    last_finished_at: datetime | None = None,
+) -> dict[str, Any]:
+    """转换会话列表返回结构。"""
     result = {
         "id": t.thread_id,
         "title": t.thread_title,
@@ -65,15 +79,21 @@ def _format_thread(t: UserThread, run_status: str | None = None) -> dict[str, An
         "is_favorited": bool(t.is_favorited) if t.is_favorited is not None else False,
     }
     result["run_status"] = run_status
+    # MySQL 的 update_time 是 naive 本地时间；附带本地时区偏移后再交给前端，
+    # 避免浏览器按自己的时区解析导致「完成未读」整体偏移。
+    result["last_finished_at"] = (
+        last_finished_at.astimezone().isoformat(timespec="seconds") if last_finished_at else None
+    )
     return result
 
 
 async def _format_threads(rows: list[UserThread], user_id: str | None) -> list[dict[str, Any]]:
-    statuses = await conversation_dao.list_active_run_statuses(
-        [thread.thread_id for thread in rows],
-        user_id,
-    )
-    return [_format_thread(thread, statuses.get(thread.thread_id)) for thread in rows]
+    conversation_ids = [thread.thread_id for thread in rows]
+    statuses = await conversation_dao.list_active_run_statuses(conversation_ids, user_id)
+    finished_times = await conversation_dao.list_latest_finished_run_times(conversation_ids, user_id)
+    return [
+        _format_thread(thread, statuses.get(thread.thread_id), finished_times.get(thread.thread_id)) for thread in rows
+    ]
 
 
 _THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
@@ -276,6 +296,7 @@ def _format_conversation_group(
     page: int,
     page_size: int,
     statuses: dict[str, str] | None = None,
+    finished_times: dict[str, datetime] | None = None,
 ) -> dict[str, Any]:
     datasource_id = group_key[len(DATASOURCE_GROUP_PREFIX) :] if group_key.startswith(DATASOURCE_GROUP_PREFIX) else None
     visible_rows = rows[:page_size]
@@ -283,7 +304,14 @@ def _format_conversation_group(
     return {
         "key": group_key,
         "datasource_id": datasource_id,
-        "conversations": [_format_thread(thread, (statuses or {}).get(thread.thread_id)) for thread in visible_rows],
+        "conversations": [
+            _format_thread(
+                thread,
+                (statuses or {}).get(thread.thread_id),
+                (finished_times or {}).get(thread.thread_id),
+            )
+            for thread in visible_rows
+        ],
         "page": page,
         "page_size": page_size,
         "has_more": has_more,
@@ -315,11 +343,10 @@ async def list_grouped(
             cursor_update_time=cursor_update_time,
             cursor_id=cursor_id,
         )
-        statuses = await conversation_dao.list_active_run_statuses(
-            [thread.thread_id for thread in rows[:page_size]],
-            user_id,
-        )
-        return {"groups": [_format_conversation_group(group_key, rows, page, page_size, statuses)]}
+        page_ids = [thread.thread_id for thread in rows[:page_size]]
+        statuses = await conversation_dao.list_active_run_statuses(page_ids, user_id)
+        finished_times = await conversation_dao.list_latest_finished_run_times(page_ids, user_id)
+        return {"groups": [_format_conversation_group(group_key, rows, page, page_size, statuses, finished_times)]}
 
     rows = await conversation_dao.list_thread_group_first_pages(
         agent_id=agent_id,
@@ -329,13 +356,12 @@ async def list_grouped(
     grouped_rows: dict[str, builtins.list[UserThread]] = {}
     for thread in rows:
         grouped_rows.setdefault(_thread_group_key(thread), []).append(thread)
-    statuses = await conversation_dao.list_active_run_statuses(
-        [thread.thread_id for thread in rows],
-        user_id,
-    )
+    conversation_ids = [thread.thread_id for thread in rows]
+    statuses = await conversation_dao.list_active_run_statuses(conversation_ids, user_id)
+    finished_times = await conversation_dao.list_latest_finished_run_times(conversation_ids, user_id)
     return {
         "groups": [
-            _format_conversation_group(key, group_rows, 1, page_size, statuses)
+            _format_conversation_group(key, group_rows, 1, page_size, statuses, finished_times)
             for key, group_rows in grouped_rows.items()
         ]
     }
@@ -403,7 +429,8 @@ async def get_detail(
     include_derived_history: bool = True,
     limit: int | None = None,
     before_sequence: int | None = None,
-    strict_limit: bool = False,
+    limit_turns: int | None = None,
+    before_turn_sequence: int | None = None,
 ) -> dict[str, Any] | None:
     """从业务表和事件表获取会话详情。
 
@@ -422,7 +449,8 @@ async def get_detail(
         include_derived=include_derived_history,
         limit=limit,
         before_sequence=before_sequence,
-        strict_limit=strict_limit,
+        limit_turns=limit_turns,
+        before_turn_sequence=before_turn_sequence,
     )
     messages = [*(event_history.get("messages") or [])]
     history_events = [*(event_history.get("history_events") or [])]
@@ -437,7 +465,11 @@ async def get_detail(
         "token_usage": event_history.get("token_usage"),
         "active_run": event_history.get("active_run"),
         "has_more": bool(event_history.get("has_more")),
+        "has_more_turns": bool(event_history.get("has_more_turns")),
         "earliest_sequence_no": event_history.get("earliest_sequence_no"),
+        "earliest_turn_sequence": event_history.get("earliest_turn_sequence"),
+        # 窗口之前已有多少轮：前端轮次导航用真实序号，不按已加载窗口重新编号
+        "turn_offset": int(event_history.get("turn_offset") or 0),
         "is_favorited": is_favorited,
     }
 
@@ -461,7 +493,11 @@ async def update_title(conversation_id: str, title: str, user_id: str | None = N
     return True
 
 
-async def generate_title(conversation_id: str, user_id: str | None = None, model_id: str | None = None) -> str | None:
+async def generate_title(
+    conversation_id: str,
+    user_id: str | None = None,
+    model_id: str | None = None,
+) -> str | None:
     """根据事件表中的第一条用户消息生成会话标题。
 
     标题仍是占位符（""/新会话/未命名会话）时才生成，已命名直接返回；
@@ -472,7 +508,7 @@ async def generate_title(conversation_id: str, user_id: str | None = None, model
         return None
 
     existing_title = str(thread.thread_title or "").strip()
-    if existing_title not in {"", "新会话", "未命名会话"}:
+    if not _is_title_placeholder(existing_title):
         return existing_title
 
     first_message = await conversation_event_service.get_first_user_message(
@@ -505,7 +541,7 @@ async def _generate_and_update_title(
         if not title:
             # LLM 调用成功但产物不可用（思考挤占/泄漏等）：与连接失败同策略——
             # 不写降级标题（原始 query 会被原样占用标题位且永不重试），保持
-            # 占位符，下一轮 Run 终态时前端会再次触发命名；区别是不发连接告警。
+            # 占位符，下一轮 Run 落库用户消息后会再次触发命名；区别是不发连接告警。
             logger.warning(f"LLM标题产物不可用，保持占位符待重试: {conversation_id}")
             return ""
     except Exception as e:
@@ -518,14 +554,87 @@ async def _generate_and_update_title(
             },
         )
         logger.warning(f"LLM生成标题失败: {e}")
-        # 命名失败不写降级标题：保持「未命名会话」占位符状态，下一轮 Run 终态时
-        # 前端会再次触发命名，直到成功自停。写降级标题会占用标题位，永久放弃重试。
+        # 命名失败不写降级标题：保持「未命名会话」占位符状态，下一轮 Run 落库
+        # 用户消息后会再次触发命名，直到成功自停。写降级标题会占用标题位，永久放弃重试。
         raise
 
-    # 更新到数据库
-    await update_title(conversation_id, title, user_id)
+    # 生成结果只能占用占位符；用户在这期间手动改名时，迟到的结果必须丢弃。
+    updated = await conversation_dao.update_title_if_placeholder(
+        conversation_id=conversation_id,
+        title=title,
+        user_id=user_id,
+        placeholders=TITLE_PLACEHOLDERS,
+    )
+    if not updated:
+        logger.info("会话标题已被用户修改，丢弃自动生成结果: %s", conversation_id)
+        return ""
 
     return title
+
+
+def _cleanup_title_task(conversation_id: str, task: asyncio.Task[None]) -> None:
+    if _TITLE_TASKS.get(conversation_id) is task:
+        _TITLE_TASKS.pop(conversation_id, None)
+
+
+async def _generate_title_in_background(
+    *,
+    conversation_id: str,
+    user_id: str,
+    model_id: str | None,
+    on_updated: Callable[[str], Awaitable[None]] | None,
+) -> None:
+    thread = await conversation_dao.get_thread(conversation_id, user_id)
+    if thread is None or not _is_title_placeholder(thread.thread_title):
+        return
+
+    title: str | None = None
+    for attempt in range(2):
+        try:
+            title = await asyncio.wait_for(
+                generate_title(conversation_id, user_id, model_id),
+                timeout=TITLE_GENERATION_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            logger.warning("后台生成标题超时: conversation_id=%s attempt=%s", conversation_id, attempt + 1)
+        except Exception as exc:
+            logger.warning(
+                "后台生成标题失败: conversation_id=%s attempt=%s error=%s", conversation_id, attempt + 1, exc
+            )
+        if title:
+            break
+        if attempt == 0:
+            await asyncio.sleep(TITLE_GENERATION_RETRY_DELAY_SECONDS)
+
+    if not title:
+        logger.warning("后台标题生成未完成，保留占位符等待下一轮 Run 重试: %s", conversation_id)
+        return
+
+    if on_updated is not None:
+        await on_updated(title)
+
+
+def schedule_title_generation(
+    *,
+    conversation_id: str,
+    user_id: str,
+    model_id: str | None = None,
+    on_updated: Callable[[str], Awaitable[None]] | None = None,
+) -> None:
+    """在后台生成标题；同一会话已有任务时直接复用，不阻塞主回答。"""
+    existing = _TITLE_TASKS.get(conversation_id)
+    if existing is not None and not existing.done():
+        return
+    task = asyncio.create_task(
+        _generate_title_in_background(
+            conversation_id=conversation_id,
+            user_id=user_id,
+            model_id=model_id,
+            on_updated=on_updated,
+        )
+    )
+    _TITLE_TASKS[conversation_id] = task
+    task.add_done_callback(lambda done: _cleanup_title_task(conversation_id, done))
 
 
 async def toggle_favorite(conversation_id: str, user_id: str | None = None) -> bool | None:

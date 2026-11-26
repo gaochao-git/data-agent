@@ -3,6 +3,73 @@ import { shallowRef } from 'vue'
 // 工具展示名唯一来源是后端 /config 的 tool_display_names；前端不再维护第二张表。
 const backendToolDisplayNames = shallowRef<Record<string, string>>({})
 
+export type SubagentOperation = 'dispatch' | 'send' | 'manage'
+
+export interface SubagentOperationArgs {
+  operation: SubagentOperation
+  args: ToolArgs
+}
+
+const SUBAGENT_TOOL_NAME = 'subagent'
+// 单工具收敛前的历史工具名：旧会话仍持久化 task，仅用于历史回放展示，不再作为可调用工具。
+const LEGACY_SUBAGENT_TOOL_NAME = 'task'
+
+/** 子智能体工具：只认统一后的 subagent 工具名（新调用入口）。 */
+export function isSubagentToolName(toolName?: string | null): boolean {
+  return String(toolName || '').trim() === SUBAGENT_TOOL_NAME
+}
+
+/** 是否为收敛前的旧子智能体工具名。 */
+export function isLegacySubagentToolName(toolName?: string | null): boolean {
+  return String(toolName || '').trim() === LEGACY_SUBAGENT_TOOL_NAME
+}
+
+/** 子智能体展示面：新工具与旧 task 历史调用共享过程卡片；不代表 task 仍可调用。 */
+export function isSubagentDisplayToolName(toolName?: string | null): boolean {
+  return isSubagentToolName(toolName) || isLegacySubagentToolName(toolName)
+}
+
+/** 取出当前调用的主参数分组；流式参数未完整时返回 null。 */
+export function getSubagentOperationArgs(args: ToolArgs = {}): SubagentOperationArgs | null {
+  // 旧会话：收敛前的分组嵌套参数，仍按 dispatch/send/manage 展示。
+  for (const operation of ['dispatch', 'send', 'manage'] as const) {
+    const value = args[operation]
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return { operation, args: value as ToolArgs }
+    }
+  }
+  // 新格式：action 平铺；list/check/wait/cancel 统一归到 manage 展示。
+  const action = String(args.action || '').trim()
+  if (action === 'dispatch' || action === 'send') return { operation: action, args }
+  if (['list', 'check', 'wait', 'cancel'].includes(action)) return { operation: 'manage', args }
+  return null
+}
+
+/** 取派发参数：新工具取 dispatch 组；旧 task 的 start（含默认 action）就是扁平参数本身。 */
+export function getSubagentDispatchArgs(toolName?: string | null, args: ToolArgs = {}): ToolArgs | null {
+  const operation = getSubagentOperationArgs(args)
+  if (operation?.operation === 'dispatch') return operation.args
+  if (!isLegacySubagentToolName(toolName)) return null
+  const action = String(args.action || 'start').trim()
+  return action === 'start' ? args : null
+}
+
+/**
+ * 取子智能体追问正文：send（新格式）或 follow_up/steer（旧 task 历史调用）。
+ *
+ * 主对话卡片与派发展示「任务书」对齐：派发看 description，追问看真正发给
+ * 子智能体的 message，而不是只展示一句 intent。
+ */
+export function getSubagentSendMessage(toolName?: string | null, args: ToolArgs = {}): string {
+  if (!isSubagentDisplayToolName(toolName)) return ''
+  const operation = getSubagentOperationArgs(args)
+  if (operation?.operation === 'send') return String(operation.args.message || '').trim()
+  if (!isLegacySubagentToolName(toolName)) return ''
+  const action = String(args.action || '').trim()
+  if (action === 'follow_up' || action === 'steer') return String(args.message || '').trim()
+  return ''
+}
+
 /** /config 下发后注入；后端声明是工具展示名的唯一来源。 */
 export function setToolDisplayNames(names?: Record<string, string> | null): void {
   backendToolDisplayNames.value = names && typeof names === 'object' ? { ...names } : {}
@@ -16,6 +83,8 @@ export function getToolDisplayName(toolName?: string | null, args: ToolArgs = {}
     const target = typeof args.name === 'string' ? args.name.trim() : ''
     return target ? `调用 MCP 工具：${target.replace(/^mcp_/, '')}` : '调用 MCP 工具'
   }
+  const taskActionName = isSubagentDisplayToolName(toolName) ? getSubagentActionDisplayName(toolName, args) : ''
+  if (taskActionName) return taskActionName
   const backendName = backendToolDisplayNames.value[name]
   if (backendName) return backendName
   // 普通 MCP 限定名由后端 tools.<name>.label / display_name 下发；缺失时展示限定名。
@@ -156,6 +225,88 @@ const dataAnalyzingDescription: DescriptionBuilder = (args) => {
   return compactInlineText(payload.user_query || payload.semantic_config_id)
 }
 
+const TASK_ACTION_NAMES: Record<string, string> = {
+  list: '查看子智能体任务',
+  check: '查看子智能体任务',
+  wait: '等待子智能体任务',
+  cancel: '取消子智能体任务',
+}
+
+const LEGACY_TASK_ACTION_NAMES: Record<string, string> = {
+  ...TASK_ACTION_NAMES,
+  follow_up: '向子智能体发送消息',
+  steer: '向子智能体发送消息',
+  approve: '批准子智能体操作',
+  reject: '拒绝子智能体操作',
+}
+
+/** 旧 task 的扁平 action → 展示名；start/缺省 action 表示派发。 */
+const legacyTaskActionDisplayName = (args: ToolArgs): string => {
+  const action = String(args.action || 'start').trim()
+  if (action === 'start') return '派发子智能体'
+  return LEGACY_TASK_ACTION_NAMES[action] || ''
+}
+
+/** 子智能体工具内按动作细分的展示名；无需细分时沿用后端静态展示名。 */
+export function getSubagentActionDisplayName(toolName?: string | null, args: ToolArgs = {}): string {
+  const name = String(toolName || '').trim()
+  if (isLegacySubagentToolName(name)) return legacyTaskActionDisplayName(args)
+  if (name !== SUBAGENT_TOOL_NAME) return ''
+  const operation = getSubagentOperationArgs(args)
+  if (!operation) return ''
+  if (operation.operation === 'dispatch') return '派发子智能体'
+  if (operation.operation === 'send') return '向子智能体发送消息'
+  if (operation.operation === 'manage') {
+    return TASK_ACTION_NAMES[String(operation.args.action || '').trim()] || ''
+  }
+  return ''
+}
+
+const taskDescription: DescriptionBuilder = (args) => {
+  const action = String(args.action || '').trim()
+  if (action === 'check' || action === 'cancel') return compactInlineText(args.task_id)
+  if (action === 'list') return compactInlineText(args.agent_id || args.status)
+  if (action === 'wait') {
+    const ids = Array.isArray(args.task_ids)
+      ? args.task_ids.map(item => compactInlineText(item)).filter(Boolean)
+      : []
+    if (ids.length === 0) return ''
+    return ids.length === 1 ? ids[0]! : `${ids[0]} 等 ${ids.length} 个任务`
+  }
+  return ''
+}
+
+const startTaskDescription: DescriptionBuilder = (args) => {
+  const type = String(args.subagent_type || '').trim()
+  const summary = compactInlineText(args.description, 80)
+  return type && summary ? `${type} · ${summary}` : type || summary
+}
+
+const followUpTaskDescription: DescriptionBuilder = (args) => {
+  const taskId = compactInlineText(args.task_id)
+  const message = compactInlineText(args.message, 80)
+  return taskId && message ? `${taskId} · ${message}` : taskId || message
+}
+
+const legacyTaskDescription: DescriptionBuilder = (args) => {
+  const action = String(args.action || 'start').trim()
+  if (action === 'check' || action === 'cancel' || action === 'approve' || action === 'reject') {
+    return compactInlineText(args.task_id)
+  }
+  if (action === 'list') return compactInlineText(args.agent_id || args.status)
+  if (action === 'wait') return taskDescription(args)
+  if (action === 'follow_up' || action === 'steer') return followUpTaskDescription(args)
+  return startTaskDescription(args)
+}
+
+const subagentDescription: DescriptionBuilder = (args) => {
+  const operation = getSubagentOperationArgs(args)
+  if (!operation) return ''
+  if (operation.operation === 'dispatch') return startTaskDescription(operation.args)
+  if (operation.operation === 'send') return followUpTaskDescription(operation.args)
+  return taskDescription(operation.args)
+}
+
 const TOOL_DESCRIPTION_BUILDERS: Record<string, DescriptionBuilder> = {
   file_read: filePathDescription,
   file_edit: filePathDescription,
@@ -177,11 +328,8 @@ const TOOL_DESCRIPTION_BUILDERS: Record<string, DescriptionBuilder> = {
   calculator_tool: calculatorDescription,
   officecli_run: args => Array.isArray(args.command_args) ? compactInlineText(args.command_args.join(' ')) : '',
   bash_run: args => compactInlineText(args.command),
-  task: args => {
-    const type = String(args.subagent_type || '').trim()
-    const summary = compactInlineText(args.description, 80)
-    return type && summary ? `${type} · ${summary}` : type || summary
-  },
+  subagent: subagentDescription,
+  task: legacyTaskDescription,
   write_todos: args => {
     const todos = Array.isArray(args.todos) ? args.todos : []
     const done = todos.filter(item => item?.status === 'completed').length

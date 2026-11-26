@@ -23,10 +23,15 @@ export const weeklyDayShortLabel = (value: number | string): string => {
 export const SCHEDULE_RUN_STATUS_TEXT: Record<string, string> = {
   pending: '排队中',
   claimed: '已领取',
-  dispatched: '执行中',
-  succeeded: '成功',
+  dispatched: '已派发',
+  active: '执行中',
+  cancelling: '取消中',
+  interrupting: '中断中',
+  waiting_user: '等待回答',
+  finished: '成功',
   failed: '失败',
   cancelled: '已取消',
+  interrupted: '已中断',
   skipped: '已跳过'
 }
 
@@ -34,9 +39,14 @@ export const SCHEDULE_RUN_STATUS_CLASS: Record<string, string> = {
   pending: 'bg-slate-100 text-slate-600',
   claimed: 'bg-blue-50 text-blue-600',
   dispatched: 'bg-blue-50 text-blue-600',
-  succeeded: 'bg-emerald-50 text-emerald-700',
+  active: 'bg-blue-50 text-blue-600',
+  cancelling: 'bg-amber-50 text-amber-700',
+  interrupting: 'bg-amber-50 text-amber-700',
+  waiting_user: 'bg-amber-50 text-amber-700',
+  finished: 'bg-emerald-50 text-emerald-700',
   failed: 'bg-red-50 text-red-700',
   cancelled: 'bg-slate-100 text-slate-500',
+  interrupted: 'bg-amber-50 text-amber-700',
   skipped: 'bg-amber-50 text-amber-700'
 }
 

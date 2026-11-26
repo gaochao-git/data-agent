@@ -8,7 +8,12 @@ from typing import Literal, cast
 from urllib.parse import unquote
 
 from utils.skill_paths import SKILLS_VIRTUAL_ROOT
-from utils.tool_result_store import QUERY_RESULT_DIR_NAME, TOOL_OFFLOAD_DIR_NAME
+from utils.workspace_system_paths import (
+    QUERY_RESULT_DIR_NAME,
+    SEMANTIC_DIR_NAME,
+    SYSTEM_DIR_NAME,
+    TOOL_OFFLOAD_DIR_NAME,
+)
 
 WorkspacePathKind = Literal["workspace", "outputs", "uploads", "memory", "skills"]
 
@@ -29,24 +34,33 @@ class LogicalWorkspacePath:
     @property
     def is_semantic_model(self) -> bool:
         return self.kind == "workspace" and (
-            self.relative_path == "semantic" or self.relative_path.startswith("semantic/")
+            self.relative_path == f"{SYSTEM_DIR_NAME}/{SEMANTIC_DIR_NAME}"
+            or self.relative_path.startswith(f"{SYSTEM_DIR_NAME}/{SEMANTIC_DIR_NAME}/")
         )
 
     @property
     def is_tool_offload(self) -> bool:
-        return self.kind == "outputs" and (
-            self.relative_path == TOOL_OFFLOAD_DIR_NAME or self.relative_path.startswith(f"{TOOL_OFFLOAD_DIR_NAME}/")
+        return self.kind == "workspace" and (
+            self.relative_path == f"{SYSTEM_DIR_NAME}/{TOOL_OFFLOAD_DIR_NAME}"
+            or self.relative_path.startswith(f"{SYSTEM_DIR_NAME}/{TOOL_OFFLOAD_DIR_NAME}/")
         )
 
     @property
     def is_query_result(self) -> bool:
-        return self.kind == "outputs" and (
-            self.relative_path == QUERY_RESULT_DIR_NAME or self.relative_path.startswith(f"{QUERY_RESULT_DIR_NAME}/")
+        return self.kind == "workspace" and (
+            self.relative_path == f"{SYSTEM_DIR_NAME}/{QUERY_RESULT_DIR_NAME}"
+            or self.relative_path.startswith(f"{SYSTEM_DIR_NAME}/{QUERY_RESULT_DIR_NAME}/")
+        )
+
+    @property
+    def is_system_root(self) -> bool:
+        return self.kind == "workspace" and (
+            self.relative_path == SYSTEM_DIR_NAME or self.relative_path.startswith(f"{SYSTEM_DIR_NAME}/")
         )
 
     @property
     def is_system_result(self) -> bool:
-        """系统管理的结果目录（outputs/query_result 与 outputs/.tool-offload）。"""
+        """系统管理的结果目录：workspace/.system/{query_result,tool-offload}。"""
         return self.is_tool_offload or self.is_query_result
 
     @property
@@ -124,14 +138,14 @@ class WorkspacePathPolicy:
             allow_uploads_write and logical_path.kind == "uploads"
         ):
             raise ValueError("只允许写入 workspace/、outputs/ 或 memory/")
-        if logical_path.is_system_result:
-            raise ValueError("不允许通过文件编辑工具修改系统结果目录")
         if logical_path.is_semantic_model and not allow_managed_semantic_model_write:
-            raise ValueError("/mnt/user-data/workspace/semantic/ 是本轮语义模型只读快照，不能修改")
+            raise ValueError(f"{SYSTEM_DIR_NAME}/{SEMANTIC_DIR_NAME} 是本轮语义模型只读快照，不能修改")
         if allow_managed_semantic_model_write and (
             not logical_path.is_semantic_model or not logical_path.relative_path.lower().endswith(".yaml")
         ):
-            raise ValueError("内部系统写入只允许 /mnt/user-data/workspace/semantic/ 下的 YAML 文件")
+            raise ValueError(f"内部语义模型写入只能覆盖 {SYSTEM_DIR_NAME}/{SEMANTIC_DIR_NAME} 下的 YAML 文件")
+        if logical_path.is_system_root and not (allow_managed_semantic_model_write and logical_path.is_semantic_model):
+            raise ValueError("不允许修改 workspace/.system 系统目录")
 
     def to_sandbox_path(self, logical_path: LogicalWorkspacePath) -> str:
         if logical_path.is_skill:

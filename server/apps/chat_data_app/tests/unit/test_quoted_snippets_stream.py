@@ -148,8 +148,8 @@ def test_generate_chat_data_stream_passes_quoted_snippets_to_inner(monkeypatch, 
 
     workspace_root = tmp_path / "user-data"
     (workspace_root / "uploads").mkdir(parents=True)
-    (workspace_root / "outputs" / "query_result").mkdir(parents=True)
-    (workspace_root / "outputs" / "query_result" / "r.json").write_text("{}", encoding="utf-8")
+    (workspace_root / "workspace" / ".system" / "query_result").mkdir(parents=True)
+    (workspace_root / "workspace" / ".system" / "query_result" / "r.json").write_text("{}", encoding="utf-8")
 
     async def fake_prepare_workspace(*_args, **_kwargs):
         return {"root": str(workspace_root)}

@@ -1,7 +1,7 @@
 ---
 name: officecli
 title: Office 文档处理
-description: 使用沙箱内预装的 OfficeCLI 创建、检查和修改 Word、Excel、PowerPoint 文件。
+description: 使用预装的 OfficeCLI 创建、检查和修改 Word、Excel、PowerPoint 文件。
 metadata:
   domain: 文档处理
   category: office_document
@@ -20,7 +20,7 @@ OfficeCLI 是 Office Open XML 的结构化编辑器，不需要安装 Microsoft 
 
 1. 本 `SKILL.md` 已通过 `load_skill` 读取。本技能通过 `officecli_run` 工具执行 OfficeCLI；运行失败时如实说明，不要伪造修改结果。
 2. 禁止安装、升级、联网下载、插件、MCP、`watch`、后台进程或访问宿主机路径。
-3. OfficeCLI 只能操作 `/mnt/user-data/uploads/`、`/mnt/user-data/workspace/` 和 `/mnt/user-data/outputs/` 中的 Office 文件；只允许写入 `workspace` 或 `outputs`，禁止修改 uploads 原文件或系统管理的 `outputs/query_result/`、`outputs/.tool-offload/`。`/mnt/skills/` 仅供 `file_read` 读取参考资料，不能作为 OfficeCLI 的文档输入、输出或 cwd。
+3. OfficeCLI 只能操作 `/mnt/user-data/uploads/`、`/mnt/user-data/workspace/` 和 `/mnt/user-data/outputs/` 中的 Office 文件；只允许写入 `workspace` 或 `outputs`，禁止修改 uploads 原文件或系统管理的 `workspace/.system/query_result/`、`workspace/.system/tool-offload/`。`/mnt/skills/` 仅供 `file_read` 读取参考资料，不能作为 OfficeCLI 的文档输入、输出或 cwd。
 4. `officecli_run(command_args=[...])` 的每个数组元素就是一个独立参数，**不要加引号、不要把整条命令拼成一个字符串**。文件路径一律用完整绝对路径；含空格、方括号或中文时照原样写（如 `"/mnt/user-data/workspace/我的 报告.docx"`），加引号会被当成文件名的一部分。
 5. 不确定命令、元素路径或属性名时，先用 `officecli help <format> <element>` 查询，不要猜测。`docx`、`xlsx`、`pptx` 分别对应 Word、Excel、PowerPoint。
 
@@ -46,8 +46,8 @@ OfficeCLI 是 Office Open XML 的结构化编辑器，不需要安装 Microsoft 
    - 新建文档铺整篇（段落/表格/幻灯片较多时）：优先用一个 `batch` 提交全部结构（一次工具调用写完，实测 200 段约 0.4s，逐段 `add` 每段一轮工具调用，很慢）；段落只有两三个时逐条 `add` 更简单；
    - 编辑已有文档：先 `view`/`query` 读取结构，建议用 `@paraId` 选择器定位目标段落后再修改；注意 `batch` 内的 remove/move 会使后续**位置索引**动态重算，按删除前快照写 `p[N]` 会错位——含 remove/move 的批量应改用 `@paraId` 定位；
    - 修改已存在文件先 `file_copy` 到 workspace 再操作。
-   `batch` 不接受内联 JSON 位置参数，须先用 `file_write` 把 JSON 数组写入 workspace 临时文件，再 `officecli_run(command_args=["batch", "<file>", "--input", "<json临时文件>"])` 提交；batch 是原子的，一条失败整批不落盘（exit=1），按逐条 ERROR 修复后整批重提。不使用 `raw`、`raw-set` 或 `add-part` 直接改 OOXML XML。
-7. 修改命令成功后，当前运行时会将 `workspace`/`outputs` 的变更同步到应用侧；需要显式确认 OfficeCLI 已刷新文件时可调用 `save`，但不必在每条修改后重复调用。随后执行 `validate` 和 `view ... issues` 校验。校验失败或样式未解析时先修复，不交付损坏或显示异常的文件。（`open`/`close` 被禁用；视觉检查：优先 `view screenshot` 截图后用 `file_read` 看图复核，报 `No headless browser available` 时改用 `view html`，不要尝试自行安装浏览器。）
+   `batch` 不接受内联 JSON 位置参数，须先用 `file_write` 把 JSON 数组写入 workspace 临时文件，再 `officecli_run(command_args=["batch", "<file>", "--input", "<json临时文件>"])` 提交；batch 是原子的，一条失败整批不落盘（exit=1），按逐条 ERROR 修复后整批重提。**batch JSON 不解释 `\\n`/`\\v`/`\\t` 两字符转义**，要传真实字符用 JSON 转义（`"\n"` 新段落、`"\u000b"` 软换行）；而单条命令的 `--prop` 里 `\\n`/`\\v`/`\\t` 会被 CLI 解释，两种形态别混（详见各格式参考文档）。不使用 `raw`、`raw-set` 或 `add-part` 直接改 OOXML XML。
+7. 修改命令成功后，当前运行时会将 `workspace`/`outputs` 的变更同步到应用侧；需要显式确认 OfficeCLI 已刷新文件时可调用 `save`，但不必在每条修改后重复调用。随后执行 `validate` 和 `view ... issues` 校验。校验失败或样式未解析时先修复，不交付损坏或显示异常的文件。（`open`/`close` 被禁用；视觉检查：优先 `view screenshot` 截图后用 `read_image` 看图复核，报 `No headless browser available` 时改用 `view html`，不要尝试自行安装浏览器。）
 8. 用 `file_copy` 把最终文件复制到 `/mnt/user-data/outputs/<业务名>.<docx|xlsx|pptx>`，确认文件存在后调用 `present_artifacts(files=["/mnt/user-data/outputs/<实际文件名>"])`。
 
 ## 输出要求

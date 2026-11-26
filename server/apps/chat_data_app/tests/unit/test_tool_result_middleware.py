@@ -29,13 +29,13 @@ def _request(
     return SimpleNamespace(
         state={
             "conversation_id": conversation_id,
-            "user_id": user_id,
             "messages": [HumanMessage(content="查询结果")],
             "workspace": {
                 "workspace_root": workspace_root or "",
                 "workspace_backend": "local",
             },
-        }
+        },
+        runtime=SimpleNamespace(context={"user_id": user_id}),
     )
 
 
@@ -76,10 +76,10 @@ async def test_query_result_is_saved_as_reference_only(monkeypatch, tmp_path):
     assert payload["status"] == "succeeded"
     assert payload["data"] is None
     result_id = payload["meta"]["result_id"]
-    assert payload["meta"]["result_path"] == f"/mnt/user-data/outputs/query_result/{result_id}.json"
-    assert json.loads((Path(paths["outputs"]) / "query_result" / f"{result_id}.json").read_text(encoding="utf-8"))[
-        "results"
-    ][0]["data"] == [{"value": 1}]
+    assert payload["meta"]["result_path"] == f"/mnt/user-data/workspace/.system/query_result/{result_id}.json"
+    assert json.loads(
+        (Path(paths["workspace"]) / ".system" / "query_result" / f"{result_id}.json").read_text(encoding="utf-8")
+    )["results"][0]["data"] == [{"value": 1}]
 
 
 @pytest.mark.asyncio
@@ -116,7 +116,9 @@ async def test_query_result_keeps_object_preview_and_source_tool(monkeypatch, tm
     assert "preview" not in payload["meta"]
     assert result.artifact["chatdata_tool_result_recovery"]["source_tool"] == "ontology_tool"
     saved = json.loads(
-        (Path(_paths["outputs"]) / "query_result" / f"{payload['meta']['result_id']}.json").read_text(encoding="utf-8")
+        (Path(_paths["workspace"]) / ".system" / "query_result" / f"{payload['meta']['result_id']}.json").read_text(
+            encoding="utf-8"
+        )
     )
     assert saved["preview"]["kind"] == "objects"
 
@@ -140,10 +142,10 @@ async def test_query_result_is_offloaded_to_hidden_outputs_store(monkeypatch, tm
     result_id = payload["meta"]["result_id"]
 
     assert payload["data"] is None
-    assert payload["meta"]["result_path"] == f"/mnt/user-data/outputs/query_result/{result_id}.json"
+    assert payload["meta"]["result_path"] == f"/mnt/user-data/workspace/.system/query_result/{result_id}.json"
     assert payload["meta"]["content_in_context"] is False
     assert "完整结果已保存" in payload["meta"]["message"]
-    saved_path = Path(paths["outputs"]) / "query_result" / f"{result_id}.json"
+    saved_path = Path(paths["workspace"]) / ".system" / "query_result" / f"{result_id}.json"
     assert json.loads(saved_path.read_text(encoding="utf-8"))["results"][0]["data"][0]["content"] == "x" * 200
 
 
@@ -157,10 +159,10 @@ async def test_generic_tool_result_is_offloaded_to_hidden_outputs_text_file(monk
 
     assert result.content.startswith("[tool_result_offloaded]\n")
     assert "source_tool=calculator_tool" in result.content
-    assert "result_path=/mnt/user-data/outputs/.tool-offload/" in result.content
+    assert "result_path=/mnt/user-data/workspace/.system/tool-offload/" in result.content
     assert "content_in_context=false" in result.content
     assert "file_read" not in result.content
-    files = list((Path(paths["outputs"]) / ".tool-offload").glob("*.txt"))
+    files = list((Path(paths["workspace"]) / ".system" / "tool-offload").glob("*.txt"))
     assert len(files) == 1
     assert files[0].read_text(encoding="utf-8") == "x" * 200
 
@@ -174,8 +176,8 @@ async def test_structured_generic_tool_result_is_serialized_before_offload(monke
 
     result = await tool_result._finalize_tool_message(message, request)
 
-    assert "/mnt/user-data/outputs/.tool-offload/" in result.content
-    files = list((Path(paths["outputs"]) / ".tool-offload").glob("*.txt"))
+    assert "/mnt/user-data/workspace/.system/tool-offload/" in result.content
+    files = list((Path(paths["workspace"]) / ".system" / "tool-offload").glob("*.txt"))
     assert len(files) == 1
     assert json.loads(files[0].read_text(encoding="utf-8")) == content
 
@@ -201,7 +203,7 @@ async def test_remaining_context_budget_does_not_change_per_result_threshold(mon
     result = await tool_result._finalize_tool_message(message, request)
 
     assert result.content == message.content
-    assert not list((Path(_paths["outputs"]) / ".tool-offload").glob("*"))
+    assert not list((Path(_paths["workspace"]) / ".system" / "tool-offload").glob("*"))
 
 
 @pytest.mark.asyncio

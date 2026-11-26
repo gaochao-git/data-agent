@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import fcntl
 import mimetypes
 import os
 import tempfile
@@ -37,15 +38,22 @@ from apps.chat_data_app.agent.workspace.runtime import (  # noqa: F401
 )
 from apps.chat_data_app.agent.workspace.workspace_local_backend import (
     delete_local_workspace_file,
+    write_local_workspace_text_file,
 )
 from apps.chat_data_app.agent.workspace.workspace_path_policy import (
     USER_DATA_VIRTUAL_ROOT,
     WORKSPACE_PATH_POLICY,
 )
+from apps.chat_data_app.services.memory.conversation_memory_service import (
+    MemoryDocumentConflictError,
+    replace_memory_document,
+)
 from apps.chat_data_app.services.setting_service import get_runtime_setting
 from utils.database import get_session
 from utils.logger import get_logger
+from utils.storage_paths import conversation_semantic_dir_from_workspace
 from utils.tool_result_store import ToolResultStore
+from utils.workspace_system_paths import SEMANTIC_DIR_NAME, SYSTEM_DIR_NAME
 
 from ... import AGENT_ID
 from ...daos.agent_inbox_dao import AgentInboxDao
@@ -98,10 +106,15 @@ def _format_size_limit(max_bytes: int) -> str:
 # 这些状态下的 Run 正在写工作区，此时删除会让沙箱回写被判成「应用侧已变更」而使该 Run 落盘失败。
 # 「waiting_user」是挂起等待用户输入，Run 自身不在写盘，且前端 runBusy 已为 false，故放行。
 _BLOCKING_WORKSPACE_DELETE_RUN_STATUSES = frozenset({"pending", "active", "cancelling"})
+_WORKSPACE_EDIT_LOCK_FILE_NAME = ".workspace-edit.lock"
 
 
 class WorkspaceFileDeleteConflictError(RuntimeError):
     """删除请求与正在执行的 Run 冲突。"""
+
+
+class WorkspaceFileSaveConflictError(RuntimeError):
+    """保存请求与正在执行的 Run 或并发写入冲突。"""
 
 
 class WorkspaceArchiveTooLargeError(RuntimeError):
@@ -145,11 +158,11 @@ def delete_workspace_file(
 
     只删文件、不删目录：目录递归删除需要单独的确认交互，不在这里代劳。
     路径安全全部下沉到 ``delete_local_workspace_file``（符号链接拒绝、realpath 越界校验、
-    系统结果目录拒绝），因此 ``outputs/query_result`` 在这里已被挡住。
+    系统结果目录拒绝），因此 ``workspace/.system/query_result`` 在这里已被挡住。
     """
     logical_path = WORKSPACE_PATH_POLICY.parse(path)
-    if logical_path.is_system_result:
-        raise ValueError("查询结果需要留存审计，不支持删除")
+    if logical_path.is_system_root:
+        raise ValueError("系统数据目录只读，不支持删除")
     workspace = ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
     return delete_local_workspace_file(workspace["root"], path, allow_uploads=True)
 
@@ -200,7 +213,7 @@ async def delete_conversation_workspace_file(
     """删除当前用户会话工作区中的单个文件。
 
     三条约束：
-    1. ``outputs/query_result``（SQL 查询结果）与 ``outputs/.tool-offload`` 是审计留存，永不删除；
+    1. ``workspace/.system/query_result``（SQL 查询结果）与 ``workspace/.system/tool-offload`` 是审计留存，永不删除；
     2. Run 正在执行时拒绝，避免把该 Run 的沙箱回写判成「应用侧已变更」而让它落盘失败；
     3. uploads 删除连带清理 ``uploaded_files`` 记录，避免历史附件卡片指向不存在的文件。
     """
@@ -208,8 +221,8 @@ async def delete_conversation_workspace_file(
         raise WorkspaceFileDeleteConflictError("智能体正在执行当前会话，请等本轮结束后再删除文件")
 
     logical_path = WORKSPACE_PATH_POLICY.parse(path)
-    if logical_path.is_system_result:
-        raise ValueError("查询结果需要留存审计，不支持删除")
+    if logical_path.is_system_root:
+        raise ValueError("系统数据目录只读，不支持删除")
 
     # uploads 命中上传记录时整条交给 UploadedFileService：它同时负责物理文件、解析产物与记录，
     # 不会留下「文件删了但账还在」的窗口；未命中记录（例如解析产物）才走纯物理删除。
@@ -232,25 +245,68 @@ async def delete_conversation_workspace_file(
     return {**result, "record_cleaned": False}
 
 
+def _tree_bytes(root: Path, *, exclude: Path | None = None) -> int:
+    """统计目录下普通文件字节数；可排除旧目录，缺失/异常按 0 处理。"""
+    if not root.is_dir():
+        return 0
+    total = 0
+    for item in root.rglob("*"):
+        if not item.is_file() or item.is_symlink():
+            continue
+        if exclude is not None and (item == exclude or exclude in item.parents):
+            continue
+        try:
+            total += item.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
 def get_workspace_total_size(workspace_root: str | Path) -> int:
     """统计会话工作区四个目录的总字节数。
 
     只统计普通文件；缺失目录按 0 处理。上传前校验与文件列表里的占用展示共用这一口径。
     """
     root = Path(workspace_root)
-    total = 0
-    for directory_name in WORKSPACE_DIR_NAMES:
-        directory = root / directory_name
-        if not directory.exists():
+    semantic_cache = conversation_semantic_dir_from_workspace(str(root))
+    legacy_semantic = root / "workspace" / "semantic"
+    total = sum(_tree_bytes(root / directory_name, exclude=legacy_semantic) for directory_name in WORKSPACE_DIR_NAMES)
+    return total + _tree_bytes(semantic_cache)
+
+
+def _is_stale_legacy_semantic(root: Path, path: Path) -> bool:
+    """无条件忽略共享目录里的历史 semantic 文件（是否命中当前缓存都不计）。"""
+    legacy_semantic = root / "workspace" / "semantic"
+    return path == legacy_semantic or legacy_semantic in path.parents
+
+
+def _append_semantic_workspace_entries(root: Path, files: list[dict[str, Any]]) -> None:
+    """把本地 semantic 缓存投影到逻辑工作区文件列表。"""
+    semantic_root = conversation_semantic_dir_from_workspace(str(root))
+    if not semantic_root.is_dir():
+        return
+    for item in sorted(semantic_root.rglob("*")):
+        if not item.is_file() or item.is_symlink():
             continue
-        for item in directory.rglob("*"):
-            if not item.is_file():
-                continue
-            try:
-                total += item.stat().st_size
-            except OSError:
-                continue
-    return total
+        relative_path = f"workspace/{SYSTEM_DIR_NAME}/{SEMANTIC_DIR_NAME}/{item.relative_to(semantic_root).as_posix()}"
+        visible_path = f"{USER_DATA_VIRTUAL_ROOT}/{relative_path}"
+        if any(existing["path"] == visible_path for existing in files):
+            continue
+        try:
+            stat = item.stat()
+        except OSError:
+            continue
+        files.append(
+            {
+                "path": visible_path,
+                "relative_path": relative_path,
+                "directory": "workspace",
+                "name": item.name,
+                "size": stat.st_size,
+                "mtime": stat.st_mtime,
+                "source": "workspace",
+            }
+        )
 
 
 def list_workspace_files(
@@ -259,7 +315,7 @@ def list_workspace_files(
     *,
     created_date: str | None = None,
 ) -> list[dict[str, Any]]:
-    """列出会话工作区中的文件（含系统结果目录，仅用于展示/占用统计），不跟随逃逸符号链接。"""
+    """列出会话工作区中的文件（含系统数据目录，可展示/预览/下载、不可删改），不跟随逃逸符号链接。"""
     paths = ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
     root = Path(paths["root"]).resolve()
     files: list[dict[str, Any]] = []
@@ -269,6 +325,8 @@ def list_workspace_files(
             continue
         for item in sorted(directory.rglob("*")):
             if not item.is_file():
+                continue
+            if _is_stale_legacy_semantic(root, item):
                 continue
             try:
                 relative_path = item.relative_to(root).as_posix()
@@ -289,7 +347,45 @@ def list_workspace_files(
                     "source": directory_name,
                 }
             )
+    _append_semantic_workspace_entries(root, files)
     return files
+
+
+def list_workspace_directories(
+    conversation_id: str,
+    user_id: str = "system",
+    *,
+    created_date: str | None = None,
+) -> list[dict[str, Any]]:
+    """列出会话工作区中的目录（用于展示空目录），不跟随符号链接。"""
+    paths = ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
+    root = Path(paths["root"]).resolve()
+    directories: list[dict[str, Any]] = []
+    for directory_name in WORKSPACE_DIR_NAMES:
+        directory = root / directory_name
+        if not directory.exists():
+            continue
+        for item in sorted(directory.rglob("*")):
+            if not item.is_dir() or item.is_symlink():
+                continue
+            if _is_stale_legacy_semantic(root, item):
+                continue
+            try:
+                relative_path = item.relative_to(root).as_posix()
+                stat = item.stat()
+            except OSError:
+                continue
+            directories.append(
+                {
+                    "path": f"{USER_DATA_VIRTUAL_ROOT}/{relative_path}",
+                    "relative_path": relative_path,
+                    "directory": directory_name,
+                    "name": item.name,
+                    "mtime": stat.st_mtime,
+                    "source": directory_name,
+                }
+            )
+    return directories
 
 
 def read_workspace_text_file(
@@ -304,10 +400,11 @@ def read_workspace_text_file(
     paths = ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
     root = paths["root"]
     target = resolve_workspace_path(root, path)
-    # 系统结果目录只读展示：允许查看内容，但下载/删除/打包仍由独立接口拦截。
+    # 系统数据目录只读展示：可预览、可下载（按会话鉴权），删改由写侧 assert_writable 拦截。
     if not target.exists() or not target.is_file():
         raise FileNotFoundError(f"文件不存在: {path}")
-    size = target.stat().st_size
+    stat = target.stat()
+    size = stat.st_size
     if size > max_bytes:
         raise ValueError(f"文件过大，暂不支持预览超过 {_format_size_limit(max_bytes)} 的文件")
     content = target.read_text(encoding="utf-8", errors="replace")
@@ -317,7 +414,64 @@ def read_workspace_text_file(
         "relative_path": visible_path.removeprefix("/mnt/user-data/"),
         "content": content,
         "size": size,
+        "mtime": stat.st_mtime,
     }
+
+
+def save_workspace_text_file(
+    conversation_id: str,
+    path: str,
+    content: str,
+    expected_mtime: float,
+    max_bytes: int,
+    user_id: str = "system",
+    *,
+    created_date: str | None = None,
+) -> dict[str, Any]:
+    """保存已存在的工作区文本文件（同步实现，由 ``asyncio.to_thread`` 调用）。"""
+    logical_path = WORKSPACE_PATH_POLICY.parse(path)
+    WORKSPACE_PATH_POLICY.assert_writable(logical_path)
+    if logical_path.is_system_root:
+        raise ValueError("workspace/.system 系统目录不能编辑")
+    content_size = len(str(content or "").encode("utf-8"))
+    if content_size > max_bytes:
+        raise ValueError(f"文件内容超过大小限制（{_format_size_limit(max_bytes)}）")
+
+    paths = ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
+    root = str(Path(paths["root"]).resolve())
+    lock_path = Path(root) / _WORKSPACE_EDIT_LOCK_FILE_NAME
+    with open(lock_path, "a+", encoding="utf-8") as lock_fd:
+        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+        try:
+            if logical_path.normalized == "memory/memory.md":
+                try:
+                    return replace_memory_document(
+                        root,
+                        content,
+                        expected_mtime=expected_mtime,
+                        max_bytes=max_bytes,
+                    )
+                except MemoryDocumentConflictError as exc:
+                    raise WorkspaceFileSaveConflictError(str(exc)) from exc
+
+            target = resolve_workspace_path(root, path, writable=True)
+            if not target.exists():
+                raise FileNotFoundError(f"文件不存在: {path}")
+            if not target.is_file():
+                raise ValueError(f"目标是目录，不是文件: {path}")
+            stat = target.stat()
+            if stat.st_size > max_bytes:
+                raise ValueError(f"文件过大，暂不支持编辑超过 {_format_size_limit(max_bytes)} 的文件")
+            if abs(stat.st_mtime - float(expected_mtime)) > 1e-6:
+                raise WorkspaceFileSaveConflictError("文件已被更新，请刷新后重试")
+            result = write_local_workspace_text_file(root, path, content)
+            return {
+                "path": f"{USER_DATA_VIRTUAL_ROOT}/{logical_path.normalized}",
+                "bytes": result["bytes"],
+                "mtime": result["mtime"],
+            }
+        finally:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
 
 
 async def can_access_conversation_workspace(conversation_id: str, user_id: str) -> bool:
@@ -345,6 +499,20 @@ async def list_conversation_workspace_files(
     )
 
 
+async def list_conversation_workspace_directories(
+    conversation_id: str,
+    *,
+    user_id: str,
+) -> list[dict[str, Any]]:
+    """读取当前用户会话工作区目录（用于展示空目录）。"""
+    return await asyncio.to_thread(
+        list_workspace_directories,
+        conversation_id,
+        user_id,
+        created_date=await get_conversation_created_date(conversation_id, user_id=user_id),
+    )
+
+
 async def read_conversation_workspace_file(
     conversation_id: str,
     *,
@@ -358,6 +526,29 @@ async def read_conversation_workspace_file(
         conversation_id,
         path,
         max_bytes if max_bytes is not None else await _text_preview_max_bytes(),
+        user_id,
+        created_date=await get_conversation_created_date(conversation_id, user_id=user_id),
+    )
+
+
+async def save_conversation_workspace_file(
+    conversation_id: str,
+    *,
+    user_id: str,
+    path: str,
+    content: str,
+    expected_mtime: float,
+) -> dict[str, Any]:
+    """保存当前用户会话中已存在的文本文件（人工在线编辑通道）。"""
+    if await _has_running_agent_run(conversation_id, user_id):
+        raise WorkspaceFileSaveConflictError("智能体正在执行当前会话，请等本轮结束后再保存文件")
+    return await asyncio.to_thread(
+        save_workspace_text_file,
+        conversation_id,
+        path,
+        content,
+        expected_mtime,
+        await _text_preview_max_bytes(),
         user_id,
         created_date=await get_conversation_created_date(conversation_id, user_id=user_id),
     )
@@ -420,9 +611,10 @@ def _archive_workspace_directory(
     """把会话工作区的目录（顶层目录或其下子目录）打成 zip，写入临时文件并返回其路径等信息。
 
     archive_max_bytes=None 时回退同步兜底常量（异步入口会显式传热值）。
-    内容来源是 ``list_workspace_files`` 的白名单列表（已排除系统结果目录、内部文件与
-    逃逸符号链接），**不重新遍历磁盘**——保证「单文件下载不了的，打包也下不到」，与
-    单文件下载、前端文件树三方共用同一权限口径（consoleFileTree.ts 的防泄漏边界）。
+    内容来源是 ``list_workspace_files`` 返回的可见清单（已排除内部文件与逃逸符号链接），
+    **不重新遍历磁盘**；此处再显式排除 ``workspace/.system``；打包范围只放开 outputs 是产品交互选择，不是安全边界。
+    注意与单文件下载口径不同：单文件下载已对所有可见文件（含 .system）放开，打包顶层范围
+    仍只有 outputs（前端 ``ARCHIVE_DOWNLOADABLE_DIRECTORIES`` 与之对应）。
 
     大小限制针对 zip 产物字节（用户拍板 2026-09-19）：压缩率不可控，无法预检，故
     边写边计量（每个文件落包后核对临时文件大小），超限抛 WorkspaceArchiveTooLargeError。
@@ -438,6 +630,7 @@ def _archive_workspace_directory(
         item
         for item in list_workspace_files(conversation_id, user_id, created_date=created_date)
         if _is_under_archive_directory(str(item["relative_path"]), normalized_directory)
+        and not str(item["relative_path"]).startswith(f"workspace/{SYSTEM_DIR_NAME}/")
         and not is_system_result_workspace_path(
             root,
             resolve_workspace_path(root, f"{USER_DATA_VIRTUAL_ROOT}/{item['relative_path']}"),
@@ -559,7 +752,7 @@ def read_workspace_raw_file(
     paths = ensure_conversation_workspace(conversation_id, user_id, created_date=created_date)
     root = paths["root"]
     target = resolve_workspace_path(root, path)
-    # 系统结果目录只读展示：允许原始字节预览，但下载/删除/打包仍被拦截。
+    # 系统数据目录只读展示：原始字节可预览、可下载（按会话鉴权），删改由写侧 assert_writable 拦截。
     if not target.exists() or not target.is_file():
         raise FileNotFoundError(f"文件不存在: {path}")
     size = target.stat().st_size

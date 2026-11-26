@@ -122,6 +122,116 @@ describe('buildHistoryMessages', () => {
     ])
   })
 
+  it('历史工具调用读取后端补齐的 +N/-M', () => {
+    const messages = buildHistoryMessagesFromEvents([
+      { sequence_no: 1, turn_id: 'turn-1', event_type: 'user_message', payload: { id: 'user-1', content: '改一下文件' } },
+      {
+        sequence_no: 2,
+        turn_id: 'turn-1',
+        event_type: 'assistant_message',
+        payload: {
+          id: 'assistant-1',
+          content: '',
+          tool_calls: [{
+            id: 'tool-1',
+            name: 'file_edit',
+            args: { file_path: '/a.txt', new_content: 'a\nb', old_content: 'a\nb\nc' },
+            content_lines: 2,
+            removed_lines: 3,
+          }],
+        },
+      },
+      { sequence_no: 3, turn_id: 'turn-1', event_type: 'tool_result', payload: { id: 'result-1', tool_call_id: 'tool-1', content: '已修改' } },
+    ])
+
+    expect(messages[1]!.toolCalls?.[0]).toMatchObject({
+      tool_call_id: 'tool-1',
+      contentLines: 2,
+      removedLines: 3,
+    })
+  })
+
+  it('restores a persisted turn error on the assistant message', () => {
+    const messages = buildHistoryMessagesFromEvents([
+      { sequence_no: 1, turn_id: 'turn-1', event_type: 'user_message', payload: { id: 'user-1', content: '分析订单' } },
+      { sequence_no: 2, turn_id: 'turn-1', event_type: 'assistant_message', payload: { id: 'assistant-1', content: '已查询部分订单' } },
+      {
+        sequence_no: 3,
+        turn_id: 'turn-1',
+        event_type: 'turn_error',
+        payload: {
+          error: '本轮执行已达到 7 步上限，任务被中止。',
+          error_type: 'GraphRecursionError',
+          supersteps: 7,
+          recursion_limit: 7,
+        },
+      },
+    ])
+
+    expect(messages).toHaveLength(2)
+    expect(messages[1]).toMatchObject({
+      role: 'assistant',
+      content: '已查询部分订单',
+      error: '本轮执行已达到 7 步上限，任务被中止。',
+    })
+  })
+
+  it('creates an error-only assistant bubble when failure happens before any assistant message', () => {
+    const messages = buildHistoryMessagesFromEvents([
+      { sequence_no: 1, turn_id: 'turn-1', event_type: 'user_message', payload: { id: 'user-1', content: '分析订单' } },
+      {
+        sequence_no: 2,
+        turn_id: 'turn-1',
+        event_type: 'turn_error',
+        payload: { error: '当前输入内容过长，请拆分问题后重试。', error_type: 'ContextInputLimitExceededError' },
+      },
+    ])
+
+    expect(messages).toHaveLength(2)
+    expect(messages[1]).toMatchObject({
+      role: 'assistant',
+      content: '',
+      error: '当前输入内容过长，请拆分问题后重试。',
+    })
+  })
+
+  it('clears a stale turn error when a later assistant message proves the retry succeeded', () => {
+    const messages = buildHistoryMessagesFromEvents([
+      { sequence_no: 1, turn_id: 'turn-1', event_type: 'user_message', payload: { id: 'user-1', content: '分析订单' } },
+      { sequence_no: 2, turn_id: 'turn-1', event_type: 'assistant_message', payload: { id: 'assistant-1', content: '已查询部分订单' } },
+      { sequence_no: 3, turn_id: 'turn-1', event_type: 'turn_error', payload: { error: '本轮执行已达到 7 步上限，任务被中止。' } },
+      { sequence_no: 4, turn_id: 'turn-1', event_type: 'assistant_message', payload: { id: 'assistant-2', content: '重试完成，已生成结论。' } },
+    ])
+
+    expect(messages).toHaveLength(2)
+    expect(messages[1]!.error).toBeUndefined()
+    expect(messages[1]!.content).toContain('重试完成，已生成结论。')
+  })
+
+  it('restores annotation chip from selection marker blocks and hides internal instructions', () => {
+    const content = [
+      '这段话的来源是哪里',
+      '[文档选中内容开始]',
+      '文件：/mnt/user-data/outputs/示例文档.docx',
+      '定位：/body/p[4]（第 1 页）',
+      '选中原文：这是一份示例文档',
+      '处理建议：先根据用户的问题或要求判断意图；只需解释、核对或回答时，不要改动文件。',
+      '[文档选中内容结束]',
+    ].join('\n')
+    const messages = buildHistoryMessagesFromEvents([
+      { sequence_no: 1, turn_id: 'turn-1', event_type: 'user_message', payload: { id: 'user-1', content } },
+    ])
+
+    expect(messages[0]).toMatchObject({
+      content: '这段话的来源是哪里',
+      documentAnnotations: [{
+        filePath: 'outputs/示例文档.docx',
+        docPath: '/body/p[4]',
+        comment: '',
+      }],
+    })
+  })
+
   it('keeps assistant text before a tool call stored in the same AI message', () => {
     const messages = buildHistoryMessagesFromEvents([
       { sequence_no: 1, turn_id: 'turn-1', event_type: 'user_message', payload: { id: 'user-1', content: '生成报告' } },
@@ -182,7 +292,7 @@ describe('subagent trail replay', () => {
       },
       {
         sequence_no: 3, turn_id: 'turn-1', event_type: 'tool_result',
-        payload: { id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', tool_name: 'task', content: '1 + 1 = 2', subagent_trail: trail },
+        payload: { id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', tool_name: 'subagent', content: '1 + 1 = 2', subagent_trail: trail },
       },
       {
         sequence_no: 4, turn_id: 'turn-1', event_type: 'assistant_message',
@@ -222,7 +332,7 @@ describe('subagent trail replay', () => {
       {
         sequence_no: 3, turn_id: 'turn-1', event_type: 'tool_result',
         payload: {
-          id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', tool_name: 'task', content: '报告',
+          id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', tool_name: 'subagent', content: '报告',
           subagent_token_usage: {
             input_tokens: 3_000,
             output_tokens: 300,
@@ -253,7 +363,7 @@ describe('subagent trail replay', () => {
       {
         sequence_no: 3, turn_id: 'turn-1', event_type: 'tool_result',
         payload: {
-          id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', tool_name: 'task', content: '报告',
+          id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', tool_name: 'subagent', content: '报告',
           started_at_ms: 10_000, ended_at_ms: 190_000,
         },
       },
@@ -273,7 +383,7 @@ describe('subagent trail replay', () => {
       {
         sequence_no: 3, turn_id: 'turn-1', event_type: 'tool_result',
         payload: {
-          id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', tool_name: 'task', content: '结论',
+          id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', tool_name: 'subagent', content: '结论',
           subagent_trail: [{
             kind: 'tool', id: 'inner-1', tool_name: 'calculator_tool', args: {},
             result: '2', status: 'completed', started_at_ms: 1_000, ended_at_ms: 1_250,
@@ -298,7 +408,7 @@ describe('subagent trail replay', () => {
       {
         sequence_no: 3, turn_id: 'turn-1', event_type: 'tool_result',
         payload: {
-          id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', tool_name: 'task', content: '结论',
+          id: 'tool-result-1', role: 'tool', tool_call_id: 'task-1', tool_name: 'subagent', content: '结论',
           subagent_context_usage: usage,
         },
       },
@@ -398,6 +508,28 @@ describe('stripHistoryUserContent', () => {
     const content = '正文\n\n[引用助手回复片段开始]\n引用原文\n[引用助手回复片段结束]\n\n\n\n结尾'
 
     expect(stripHistoryUserContent(content)).toBe('正文\n\n结尾')
+  })
+
+  it('strips document annotation blocks and their trailing instruction', () => {
+    const content = [
+      '请修改这处',
+      '',
+      '[文档修改请求开始]',
+      '文件：/mnt/user-data/outputs/示例文档.docx',
+      '定位：/body/p[4]（第 1 页）',
+      '原文：这是一份示例文档',
+      '修改要求：改成季度经营分析',
+      '[文档修改请求结束]',
+      '',
+      '请使用 officecli 技能按「定位」修改文档（先 view 确认，再 set/batch），validate 通过后重新展示修改后的文件。',
+    ].join('\n')
+
+    expect(stripHistoryUserContent(content)).toBe('请修改这处')
+  })
+
+  it('strips legacy instruction text appended outside the annotation block', () => {
+    const content = '这段话的来源是哪里\n请按「定位」修改文档；完成后重新展示修改后的文件。'
+    expect(stripHistoryUserContent(content)).toBe('这段话的来源是哪里')
   })
 
   it('strips legacy semantic-model mention suffix', () => {

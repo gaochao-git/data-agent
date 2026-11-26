@@ -12,11 +12,12 @@ import { isAbortError } from '../utils/abort'
  * Run 终态：服务端结构化 done 事件的 status 字段。
  * legacy = 旧协议纯文本 [DONE]（只有流结束信号，无业务状态，不可推断成功）。
  */
-export type RunDoneStatus = 'finished' | 'failed' | 'cancelled' | 'waiting_user' | 'legacy'
+export type RunDoneStatus = 'finished' | 'failed' | 'cancelled' | 'interrupted' | 'waiting_user' | 'legacy'
 const STRUCTURED_DONE_STATUSES = new Set<RunDoneStatus>([
   'finished',
   'failed',
   'cancelled',
+  'interrupted',
   'waiting_user',
 ])
 
@@ -30,6 +31,8 @@ import type {
   ChatDataMessageEndPayload,
   ToolLifecycleEventData,
   PendingUserQuestion,
+  DocumentAnnotationRequest,
+  SubagentTaskRecord,
 } from '../types'
 
 /**
@@ -39,19 +42,22 @@ import type {
  */
 const TOOL_LIFECYCLE_EVENTS = new Set<SSEEventType>([
   'tool_started',
+  'tool_args_delta',
   'tool_progress',
   'tool_completed',
   'tool_failed',
   'subagent_message',
   'subagent_message_delta',
   'subagent_thinking_delta',
+  'subagent_steps',
   'subagent_context_usage',
+  'subagent_context_compression',
 ])
 
 /**
  * Set.has() 不触发类型窄化，这里用 type-guard 把「集合内容恰好是
  * ToolLifecycleEventData['type'] 全集」这一不变量写进类型（块内 event
- * 随即窄化为那 8 个字面量）。
+ * 随即窄化为工具生命周期那组字面量）。
  */
 const isToolLifecycleEvent = (e: SSEEventType): e is ToolLifecycleEventData['type'] =>
   TOOL_LIFECYCLE_EVENTS.has(e)
@@ -122,9 +128,13 @@ export function useSqlGenerator() {
       onTokenUsage?: (payload: ChatDataTokenUsage) => void
       /** 后端滑窗口径推送的当前生成速率（generation_speed 事件）；窗口静默不推送，前端保持上次值 */
       onGenerationSpeed?: (tokensPerSecond: number) => void
+      /** 本轮已推进的图步数与递归上限（run_steps 事件，每步一条） */
+      onRunSteps?: (supersteps: number, recursionLimit?: number) => void
       fileSelections?: string[]
       /** 划选引用片段（[{text}]）：模型可见标记块由服务端统一追加，前端只透传。 */
       quotedSnippets?: Array<{ text: string }>
+      /** 文档选中内容：带 OfficeCLI 文档内定位，服务端拼成模型可见标记块。 */
+      documentAnnotations?: DocumentAnnotationRequest[]
       enableThinking?: boolean | null
       thinkingEffort?: string | null
       runtimeOptions?: { workspace_backend: 'local' | 'sandbox' } | null
@@ -135,10 +145,13 @@ export function useSqlGenerator() {
       onToolLifecycle?: (payload: ToolLifecycleEventData) => void
       onInboxAdmitted?: (messageIds: string[]) => void
       onQuestionRequested?: (question: PendingUserQuestion) => void
+      onConversationTitleUpdated?: (payload: { conversation_id?: string; title: string }) => void
+      onSubagentTaskUpdated?: (task: SubagentTaskRecord) => void
       onRunStarted?: (runId: string) => void
       responseFactory?: (signal: AbortSignal) => Promise<Response>
       onRunEvent?: (eventId: string) => void
       onFirstEvent?: () => void
+      onStreamActivity?: () => void
       onRunCompleted?: (info: { status: RunDoneStatus; nextRunId?: string | null }) => void
     } = {},
   ): Promise<void> => {
@@ -157,8 +170,10 @@ export function useSqlGenerator() {
       onMessageEnd,
       onTokenUsage,
       onGenerationSpeed,
+      onRunSteps,
       fileSelections,
       quotedSnippets,
+      documentAnnotations,
       enableThinking,
       thinkingEffort,
       onContextCompression,
@@ -168,10 +183,13 @@ export function useSqlGenerator() {
       onToolLifecycle,
       onInboxAdmitted,
       onQuestionRequested,
+      onConversationTitleUpdated,
+      onSubagentTaskUpdated,
       onRunStarted,
       responseFactory,
       onRunEvent,
       onFirstEvent,
+      onStreamActivity,
       onRunCompleted,
     } = options
     if (!conversationId) {
@@ -213,6 +231,11 @@ export function useSqlGenerator() {
       // 划选引用片段：存引用、服务端晚解析（标记块 + additional_kwargs 留痕）
       if (quotedSnippets?.length) {
         options.quoted_snippets = quotedSnippets
+      }
+
+      // 文档选中内容：结构字段随 options 透传，服务端统一收敛与拼块
+      if (documentAnnotations?.length) {
+        options.annotations = documentAnnotations
       }
 
       if (memberDatasourceIds && memberDatasourceIds.length > 0) {
@@ -271,12 +294,14 @@ export function useSqlGenerator() {
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
+        onStreamActivity?.()
 
         buffer += decoder.decode(value, { stream: true })
         const { events, remaining } = parseSSEEvents(buffer)
         buffer = remaining
 
         for (const { event, data: dataStr, id } of events) {
+          if (event === 'heartbeat') continue
           if (!firstEventHandled) {
             firstEventHandled = true
             onFirstEvent?.()
@@ -358,6 +383,23 @@ export function useSqlGenerator() {
             continue
           }
 
+          if (event === 'run_steps') {
+            try {
+              const data = JSON.parse(dataStr)
+              const supersteps = Number(data?.supersteps)
+              const recursionLimit = Number(data?.recursion_limit)
+              if (Number.isFinite(supersteps) && supersteps > 0) {
+                onRunSteps?.(
+                  Math.floor(supersteps),
+                  Number.isFinite(recursionLimit) && recursionLimit > 0 ? Math.floor(recursionLimit) : undefined,
+                )
+              }
+            } catch (err) {
+              console.error('解析 run_steps 数据失败:', err, dataStr)
+            }
+            continue
+          }
+
           if (event === 'context_compression') {
             try {
               const data = JSON.parse(dataStr)
@@ -392,6 +434,33 @@ export function useSqlGenerator() {
               }
             } catch (err) {
               console.error('解析 question_requested 数据失败:', err, dataStr)
+            }
+            continue
+          }
+
+          if (event === 'conversation_title_updated') {
+            try {
+              const data = JSON.parse(dataStr)
+              if (data && typeof data.title === 'string') {
+                onConversationTitleUpdated?.({
+                  conversation_id: typeof data.conversation_id === 'string' ? data.conversation_id : undefined,
+                  title: data.title,
+                })
+              }
+            } catch (err) {
+              console.error('解析 conversation_title_updated 数据失败:', err, dataStr)
+            }
+            continue
+          }
+
+          if (event === 'subagent_task_updated') {
+            try {
+              const data = JSON.parse(dataStr)
+              if (data?.task && typeof data.task.task_id === 'string') {
+                onSubagentTaskUpdated?.(data.task as SubagentTaskRecord)
+              }
+            } catch (err) {
+              console.error('解析 subagent_task_updated 数据失败:', err, dataStr)
             }
             continue
           }

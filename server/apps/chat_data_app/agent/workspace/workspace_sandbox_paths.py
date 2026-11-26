@@ -9,6 +9,7 @@ from utils.logger import get_logger
 from utils.skill_paths import SKILLS_VIRTUAL_ROOT
 from utils.storage_paths import CHAT_DATA_HOME, assert_workspace_root
 from utils.tool_result_store import QUERY_RESULT_DIR_NAME, TOOL_OFFLOAD_DIR_NAME
+from utils.workspace_system_paths import SYSTEM_DIR_NAME
 
 from .workspace_path_policy import WORKSPACE_PATH_POLICY
 
@@ -41,6 +42,10 @@ def sandbox_outputs_dir() -> str:
     return f"{sandbox_thread_root()}/outputs"
 
 
+def sandbox_system_dir() -> str:
+    return f"{sandbox_workspace_dir()}/{SYSTEM_DIR_NAME}"
+
+
 def sandbox_uploads_dir() -> str:
     return f"{sandbox_thread_root()}/uploads"
 
@@ -64,20 +69,31 @@ def _is_sandbox_descendant(path: str, root: str) -> bool:
 
 
 def _is_hidden_tool_results_local_path(application_root: Path, path: Path) -> bool:
-    output_root = application_root / "outputs"
+    # 整个 .system 都由应用侧维护，不参与沙箱双向同步；否则沙箱侧没有该目录时
+    # 回写会尝试 rmdir 非空目录。
+    system_root = application_root / "workspace" / SYSTEM_DIR_NAME
+    if path == system_root or system_root in path.parents:
+        return True
     roots = (
-        output_root / TOOL_OFFLOAD_DIR_NAME,
-        output_root / QUERY_RESULT_DIR_NAME,
+        system_root / TOOL_OFFLOAD_DIR_NAME,
+        system_root / QUERY_RESULT_DIR_NAME,
     )
     return any(path == root or root in path.parents for root in roots)
 
 
 def _is_managed_semantic_model_local_path(application_root: Path, path: Path) -> bool:
-    semantic_root = application_root / "workspace" / "semantic"
-    return path == semantic_root or semantic_root in path.parents
+    roots = (
+        application_root / "workspace" / SYSTEM_DIR_NAME / "semantic",
+        # 历史会话的 workspace/semantic 已不再读取，但仍必须保持只读，避免旧文件被沙箱回写。
+        application_root / "workspace" / "semantic",
+    )
+    return any(path == root or root in path.parents for root in roots)
 
 
 def _is_unmanaged_sandbox_path(path: str) -> bool:
+    system_root = sandbox_system_dir()
+    if path == system_root or path.startswith(f"{system_root}/"):
+        return False
     return not _is_managed_semantic_model_sandbox_path(path) and not _is_tool_results_sandbox_path(path)
 
 
@@ -136,9 +152,10 @@ def _is_outputs_sandbox_path(path: str) -> bool:
 
 
 def _is_tool_results_sandbox_path(path: str) -> bool:
+    system_root = sandbox_system_dir()
     roots = (
-        f"{sandbox_outputs_dir()}/{TOOL_OFFLOAD_DIR_NAME}",
-        f"{sandbox_outputs_dir()}/{QUERY_RESULT_DIR_NAME}",
+        f"{system_root}/{TOOL_OFFLOAD_DIR_NAME}",
+        f"{system_root}/{QUERY_RESULT_DIR_NAME}",
     )
     return any(path == root or path.startswith(f"{root}/") for root in roots)
 
@@ -149,7 +166,7 @@ def _is_uploads_sandbox_path(path: str) -> bool:
 
 
 def _is_managed_semantic_model_sandbox_path(path: str) -> bool:
-    root = f"{sandbox_workspace_dir()}/semantic"
+    root = f"{sandbox_system_dir()}/semantic"
     return path == root or path.startswith(f"{root}/")
 
 

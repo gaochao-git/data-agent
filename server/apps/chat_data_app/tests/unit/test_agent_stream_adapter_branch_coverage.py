@@ -268,7 +268,8 @@ async def test_resume_handler_submits_and_streams_run_events(monkeypatch):
     assert response.media_type == "text/event-stream"
 
     body = [chunk async for chunk in response.body_iterator]
-    assert body == ["id: 3-1\ndata: chunk-a\n\n", "id: 3-2\ndata: chunk-b\n\n"]
+    assert any("id: 3-1" in chunk and "data: chunk-a" in chunk for chunk in body)
+    assert any("id: 3-2" in chunk and "data: chunk-b" in chunk for chunk in body)
     assert submitted == [
         {
             "run_id": "run-9",
@@ -314,12 +315,16 @@ def _patch_stream_preamble(monkeypatch, semantic_context, *, workspace_root, run
         "resolve_agent_runtime_options",
         lambda **_kwargs: SimpleNamespace(workspace_backend="local"),
     )
-    monkeypatch.setattr(agent_run_support, "build_runtime_skill_snapshot_async", fake_snapshot)
     monkeypatch.setattr(agent_run_support, "list_snapshot_skill_metadata", lambda _dir: [])
+
+    class _FakeRuntime(SimpleNamespace):
+        async def ensure_runtime_skills_async(self):
+            return await fake_snapshot()
+
     monkeypatch.setattr(
         agent_run_support,
         "ConversationWorkspaceRuntime",
-        runtime_cls or SimpleNamespace,
+        runtime_cls or _FakeRuntime,
     )
 
 
@@ -365,7 +370,6 @@ async def test_stream_fails_fast_on_semantic_config_error(monkeypatch):
                 datasource_id=None,
                 user_id="u1",
                 username="张三",
-                member_datasource_ids=None,
                 semantic_config_id=None,
                 request=None,
                 model_id=None,
@@ -406,7 +410,6 @@ async def test_stream_rejects_datasource_binding_conflict(monkeypatch, tmp_path)
                 datasource_id="ds-2",
                 user_id="u1",
                 username="张三",
-                member_datasource_ids=None,
                 semantic_config_id=None,
                 request=None,
                 model_id=None,
@@ -481,7 +484,6 @@ async def test_stream_resolves_attachments_and_offloads_long_input(monkeypatch, 
                 datasource_id=None,
                 user_id="u1",
                 username="张三",
-                member_datasource_ids=None,
                 semantic_config_id=None,
                 request=None,
                 model_id=None,
@@ -537,7 +539,6 @@ async def test_stream_without_attachments_skips_offload(monkeypatch, tmp_path):
                 datasource_id=None,
                 user_id="u1",
                 username="张三",
-                member_datasource_ids=None,
                 semantic_config_id=None,
                 request=None,
                 model_id=None,

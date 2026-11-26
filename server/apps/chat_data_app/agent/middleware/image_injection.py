@@ -165,7 +165,11 @@ def _build_image_injection_message(
     if not pending_requests:
         return None
     state = getattr(request, "state", None)
-    runtime = workspace_runtime_from_state(state if isinstance(state, dict) else {})
+    context = getattr(getattr(request, "runtime", None), "context", None)
+    runtime = workspace_runtime_from_state(
+        state if isinstance(state, dict) else {},
+        user_id=str(context.get("user_id") or "") if isinstance(context, dict) else None,
+    )
     workspace_root = runtime.workspace_root
 
     image_blocks, loaded_sources, failures = _load_injection_images(

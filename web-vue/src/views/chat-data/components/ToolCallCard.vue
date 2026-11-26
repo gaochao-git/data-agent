@@ -3,17 +3,23 @@
  * 工具调用卡片组件
  * 展示工具名、参数、结果
  */
-import { ref, computed } from 'vue'
+import { ref, computed, nextTick, watch } from 'vue'
 import { format as formatSQL } from 'sql-formatter'
 import { ElMessage } from 'element-plus'
 import type { ExecutionTargetOption, ToolCallInfo } from '../types'
 import QueryResultPanel from './QueryResultPanel.vue'
 import SaveToPanelModal from './SaveToPanelModal.vue'
 import { extractGeneratedSqlFromToolCall, extractQueryResultPayload, extractSemanticDslFromArgs, getQueryResultError, parseQueryResultEnvelope } from '../utils/semanticTool'
-import { compactInlineText, getToolDisplayName, getToolTechnicalDescription, formatToolTimingText, parseFileDiffResult, isFileDiffOffloaded } from '../utils/toolDisplay'
+import { compactInlineText, getSubagentActionDisplayName, getSubagentDispatchArgs, getSubagentOperationArgs, getSubagentSendMessage, getToolDisplayName, getToolTechnicalDescription, formatToolTimingText, isSubagentDisplayToolName, parseFileDiffResult, isFileDiffOffloaded } from '../utils/toolDisplay'
+import { extractFileWritePreview, extractStreamingFileWritePreview } from '../utils/fileWritePreview'
 import FileDiffViewer from './FileDiffViewer.vue'
+import FileWritePreview from './conversation/FileWritePreview.vue'
+import FileWriteViewToggle from './conversation/FileWriteViewToggle.vue'
+import MarkdownBlock from './conversation/messages/MarkdownBlock.vue'
 import { useSaveToPanel } from '../composables/useSaveToPanel'
 import { useToolTiming } from '../composables/useToolTiming'
+import { isScrolledToBottom } from '../utils/scrollFollow'
+import { extractPartialJsonString } from '../utils/partialJson'
 
 interface Props {
   toolCall: ToolCallInfo
@@ -100,17 +106,27 @@ const PARAM_LABELS: Record<string, string> = {
   datasource_id: '数据源',
   member_datasource_id: '执行机构',
   member_datasource_ids: '执行机构',
-  subagent_type: '子智能体类型'
+  subagent_type: '子智能体类型',
+  task_id: '任务 ID',
+  task_ids: '任务 ID 列表',
+  agent_id: '子智能体 ID',
+  wait_seconds: '等待秒数',
+  background: '后台执行',
+  label: '任务标题',
+  decision: '审批决定',
+  action: '操作',
+  message: '消息'
 }
 
-// 个别工具的参数名与通用语义冲突（如 task 的 description 是「任务书」，
+// 个别工具的参数名与通用语义冲突（如 subagent 的 description 是「任务书」，
 // 不代表所有工具的 description 都该这么显示），按工具维度覆盖全局表。
 const TOOL_PARAM_LABEL_OVERRIDES: Record<string, Record<string, string>> = {
-  task: { description: '任务书' }
+  subagent: { description: '任务书' }
 }
 
-const paramLabel = (key: string): string =>
-  TOOL_PARAM_LABEL_OVERRIDES[props.toolCall.tool_name]?.[key] ?? PARAM_LABELS[key] ?? key
+const paramLabel = (key: string): string => {
+  return TOOL_PARAM_LABEL_OVERRIDES[props.toolCall.tool_name]?.[key] ?? PARAM_LABELS[key] ?? key
+}
 
 // DSL 参数标签颜色
 const DSL_TAG_COLORS: Record<string, { bg: string; text: string }> = {
@@ -121,20 +137,101 @@ const DSL_TAG_COLORS: Record<string, { bg: string; text: string }> = {
   order_by: { bg: 'rgba(236, 72, 153, 0.1)', text: '#db2777' }
 }
 
-// 标题链：后端下发的展示名（MCP tools.<name>.label）→ 内置映射表/限定名兜底
-const displayName = computed(() => props.toolCall.display_name?.trim() || getToolDisplayName(props.toolCall.tool_name, props.toolCall.args))
-// 子智能体派发用机器人图标，其余工具保持扳手：图标与「派发子智能体」语义一致
-const toolIconClass = computed(() => (props.toolCall.tool_name === 'task' ? 'fa-robot' : 'fa-wrench'))
+// 标题链：subagent 管理动作的专用名 → 后端展示名（MCP tools.<name>.label）→ 内置映射表/限定名兜底
+const displayName = computed(() => {
+  const args = props.toolCall.args || {}
+  const taskActionName = getSubagentActionDisplayName(props.toolCall.tool_name, args)
+  return taskActionName
+    || props.toolCall.display_name?.trim()
+    || getToolDisplayName(props.toolCall.tool_name, args)
+})
+// 只有真正派发子智能体用机器人图标；subagent 的查询/等待/取消保持扳手。
+const toolIconClass = computed(() => {
+  return isSubagentDisplayToolName(props.toolCall.tool_name)
+    && getSubagentDispatchArgs(props.toolCall.tool_name, props.toolCall.args || {}) !== null
+    ? 'fa-robot'
+    : 'fa-wrench'
+})
 
 // 状态
 const isRunning = computed(() => props.toolCall.status === 'generating' || props.toolCall.status === 'running')
 const isError = computed(() => props.toolCall.status === 'error')
+const isCancelled = computed(() => props.toolCall.status === 'cancelled')
+const isArgsStreaming = computed(() => Boolean(props.toolCall.argsStreaming && props.toolCall.argsText))
+const argsPreviewText = computed(() => props.toolCall.argsText || '')
+
+// 写入类工具：保留原有参数视图，额外提供按文件类型渲染的「格式化」内容视图。
+// 生成中直接从半截 JSON 提前取 file_path/content，文件名与格式无需等参数收口。
+const writePreview = computed(() => extractFileWritePreview(props.toolCall.tool_name, props.toolCall.args || {}))
+const streamingWritePreview = computed(() => (
+  isArgsStreaming.value
+    ? extractStreamingFileWritePreview(props.toolCall.tool_name, argsPreviewText.value)
+    : null
+))
+const activeWritePreview = computed(() => writePreview.value || streamingWritePreview.value)
+const writeViewMode = ref<'formatted' | 'params'>('formatted')
+const showWriteViewToggle = computed(() => Boolean(activeWritePreview.value))
+const streamingWritePath = computed(() => streamingWritePreview.value?.path || '')
+watch(
+  () => props.toolCall.tool_call_id,
+  () => { writeViewMode.value = 'formatted' },
+)
+
+/** 参数预览统一走 Markdown 的 json 代码块；围栏长度按正文里最长反引号串自适应。 */
+const toJsonFence = (text: string): string => {
+  const longestTicks = (text.match(/`+/g) || []).reduce((max, run) => Math.max(max, run.length), 0)
+  const fence = '`'.repeat(Math.max(3, longestTicks + 1))
+  return `${fence}json\n${text}\n${fence}`
+}
+const fullArgsMarkdown = computed(() => toJsonFence(argsPreviewText.value))
+
+// 子智能体派发：主对话框只露任务书 description，不铺 subagent_type/label 等参数 JSON。
+const isSubagentCall = computed(() => isSubagentDisplayToolName(props.toolCall.tool_name))
+const subagentDescriptionStream = computed(() => (
+  isSubagentCall.value ? extractPartialJsonString(argsPreviewText.value, 'description') : ''
+))
+const isSubagentSendStreaming = computed(() => {
+  if (!isSubagentCall.value) return false
+  const raw = argsPreviewText.value
+  return /"action"\s*:\s*"send"/.test(raw) || /"send"\s*:\s*\{/.test(raw)
+})
+const subagentMessageStream = computed(() => (
+  isSubagentSendStreaming.value ? extractPartialJsonString(argsPreviewText.value, 'message') : ''
+))
+
+// 紧凑模式参数预览自动贴底：参数是最新输出才有价值；用户手动上翻后暂停。
+const compactArgsRef = ref<HTMLElement | null>(null)
+let compactArgsPinned = true
+const handleCompactArgsScroll = () => {
+  const element = compactArgsRef.value
+  if (element) compactArgsPinned = isScrolledToBottom(element, 24)
+}
+watch(
+  () => props.toolCall.argsText,
+  async (text) => {
+    if (!props.compact || !props.toolCall.argsStreaming || !text) return
+    await nextTick()
+    const element = compactArgsRef.value
+    if (element && compactArgsPinned) element.scrollTop = element.scrollHeight
+  },
+)
 
 // 工具执行耗时与起止时间（格式化逻辑在 utils/toolDisplay 共享）
 const { durationText } = useToolTiming(() => props.toolCall.started_at_ms, () => props.toolCall.ended_at_ms)
 const timingTitle = computed(() => formatToolTimingText(props.toolCall.started_at_ms, props.toolCall.ended_at_ms))
 
 const compactDescription = computed(() => {
+  // 子智能体派发在主对话框只露任务书 description：类型前缀（general ·）和原始参数都不展示。
+  const dispatchArgs = getSubagentDispatchArgs(props.toolCall.tool_name, props.toolCall.args || {})
+  if (dispatchArgs) {
+    const description = compactInlineText(dispatchArgs.description, 80)
+    if (description) return description
+  }
+  // 追问与派发同口径：主对话框展示真正发出去的正文，而不是只展示 intent。
+  const sendMessage = compactInlineText(getSubagentSendMessage(props.toolCall.tool_name, props.toolCall.args || {}), 80)
+  if (sendMessage) return sendMessage
+  // 文件写入生成中：file_path 通常先于 content 输出，提前把目标文件显示出来。
+  if (streamingWritePath.value) return compactInlineText(streamingWritePath.value, 80)
   // 流式 intent：args 未解析完成时由 tool_progress 提前推送，长耗时工具执行中即可展示目的
   const args = props.toolCall.args || {}
   const intent = compactInlineText(args.intent, 80) || props.toolCall.streamingIntent || ''
@@ -252,7 +349,11 @@ const todoItems = computed<TodoItem[]>(() => {
 })
 
 const displayParams = computed<DisplayParam[]>(() => {
-  const args = props.toolCall.args || {}
+  const rawArgs = props.toolCall.args || {}
+  const subagentOperation = isSubagentDisplayToolName(props.toolCall.tool_name)
+    ? getSubagentOperationArgs(rawArgs)
+    : null
+  const args = subagentOperation?.args || rawArgs
   const entries: DisplayParam[] = Object.entries(args).filter(([key, value]) => {
     if (key === 'visualization' || (props.toolCall.tool_name === 'write_todos' && key === 'todos')) return false
     if (value === null || value === undefined) return false
@@ -458,29 +559,47 @@ function getSqlTokenClass(type: string): string {
 </script>
 
 <template>
-  <div
-    v-if="compact"
-    class="group inline-flex max-w-full items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs transition-all duration-200 cursor-pointer"
-    :class="[
-      'border-transparent bg-transparent text-slate-400 hover:text-slate-600',
-      isError ? 'border-red-200 bg-red-50 text-red-600' : ''
-    ]"
-    @click="emit('select')"
-  >
-    <i class="fa-solid transition-colors duration-200 group-hover:text-slate-600" :class="toolIconClass"></i>
-    <span class="flex min-w-0 items-center" :title="[compactDescription || toolCall.tool_name, timingTitle].filter(Boolean).join(' · ')">
-      <span class="shrink-0 font-semibold">{{ displayName }}</span>
-      <span v-if="addedLinesText" class="ml-1.5 shrink-0 font-mono text-[11px] font-medium text-emerald-500">{{ addedLinesText }}</span>
-      <span v-if="removedLinesText" class="ml-1 shrink-0 font-mono text-[11px] font-medium text-rose-500">{{ removedLinesText }}</span>
-      <span v-if="compactDescription" class="ml-2 min-w-0 truncate font-mono text-[11px] font-normal text-slate-400 transition-colors duration-200 group-hover:text-slate-600">{{ compactDescription }}</span>
-    </span>
-    <span
-      v-if="durationText"
-      class="shrink-0 font-mono text-[11px] text-slate-400 transition-colors duration-200 group-hover:text-slate-600"
-      :title="timingTitle"
-    >{{ durationText }}</span>
-    <i v-if="isRunning && showRunningIndicator" class="fa-solid fa-spinner fa-spin text-[11px] text-slate-400"></i>
-    <i class="fa-solid fa-chevron-right text-[10px] text-slate-400 opacity-0 transition-all duration-200 group-hover:text-slate-600 group-hover:opacity-100"></i>
+  <div v-if="compact" class="group min-w-0 max-w-full">
+    <div
+      class="inline-flex max-w-full items-center gap-2 rounded-md border px-2.5 py-1.5 text-xs transition-all duration-200 cursor-pointer"
+      :class="[
+        'border-transparent bg-transparent text-slate-400 hover:text-slate-600',
+        isError ? 'border-red-200 bg-red-50 text-red-600' : '',
+        isCancelled ? 'border-slate-200 bg-slate-50 text-slate-500' : ''
+      ]"
+      @click="emit('select')"
+    >
+      <i class="fa-solid transition-colors duration-200 group-hover:text-slate-600" :class="toolIconClass"></i>
+      <span class="flex min-w-0 items-center" :title="[compactDescription || toolCall.tool_name, timingTitle].filter(Boolean).join(' · ')">
+        <span class="shrink-0 font-semibold">{{ displayName }}</span>
+        <span v-if="addedLinesText" class="ml-1.5 shrink-0 font-mono text-[11px] font-medium text-emerald-500">{{ addedLinesText }}</span>
+        <span v-if="removedLinesText" class="ml-1 shrink-0 font-mono text-[11px] font-medium text-rose-500">{{ removedLinesText }}</span>
+        <span v-if="compactDescription" class="ml-2 min-w-0 truncate font-mono text-[11px] font-normal text-slate-400 transition-colors duration-200 group-hover:text-slate-600">{{ compactDescription }}</span>
+      </span>
+      <span
+        v-if="durationText"
+        class="shrink-0 font-mono text-[11px] text-slate-400 transition-colors duration-200 group-hover:text-slate-600"
+        :title="timingTitle"
+      >{{ durationText }}</span>
+      <span
+        v-if="isCancelled"
+        class="shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500"
+        :title="toolCall.result || '任务已停止'"
+      >已停止</span>
+      <i v-if="isRunning && showRunningIndicator" class="fa-solid fa-spinner fa-spin text-[11px] text-slate-400"></i>
+      <i class="fa-solid fa-chevron-right text-[10px] text-slate-400 opacity-0 transition-all duration-200 group-hover:text-slate-600 group-hover:opacity-100"></i>
+    </div>
+    <!-- 参数生成中：主对话只给子智能体露任务书/追问正文，其余工具正文统一进侧边栏详情。 -->
+    <div v-if="isArgsStreaming && isSubagentCall" class="mt-1.5 min-w-0">
+      <div
+        v-if="subagentDescriptionStream || subagentMessageStream"
+        ref="compactArgsRef"
+        class="tool-description-preview max-h-48 max-w-full overflow-auto rounded-md border border-slate-200 bg-slate-50"
+        @scroll.passive="handleCompactArgsScroll"
+      >
+        <MarkdownBlock :content="subagentDescriptionStream || subagentMessageStream" />
+      </div>
+    </div>
   </div>
   <div
     v-else
@@ -535,8 +654,31 @@ function getSqlTokenClass(type: string): string {
           </div>
         </div>
       </div>
+      <!-- 写入类工具：格式化内容 / 原始参数两种视图；参数视图沿用原有结构 -->
+      <div v-if="showWriteViewToggle" class="mb-2 flex items-center justify-between gap-2">
+        <span class="text-xs font-medium text-gray-500">显示方式</span>
+        <FileWriteViewToggle v-model="writeViewMode" />
+      </div>
+      <!-- 参数生成中的原始 JSON 预览：不解析半截 JSON，生成结束后切回结构化参数 -->
+      <div v-if="isArgsStreaming && (!activeWritePreview || writeViewMode === 'params')" class="mb-3 last:mb-0">
+        <div v-if="toolCall.argsTruncated" class="mb-1.5 text-[11px] text-gray-400">预览已截断</div>
+        <div class="tool-args-preview max-h-60 max-w-full overflow-auto rounded-lg border border-slate-200 bg-slate-50">
+          <MarkdownBlock :content="fullArgsMarkdown" />
+        </div>
+      </div>
+      <!-- 写入内容格式化视图：Markdown/JSON/SQL/YAML/代码/纯文本按需渲染 -->
+      <FileWritePreview
+        v-else-if="activeWritePreview && writeViewMode === 'formatted'"
+        class="mb-3 last:mb-0"
+        :path="activeWritePreview.path"
+        :content="activeWritePreview.content"
+        :action="activeWritePreview.action"
+        :streaming="isArgsStreaming"
+        :truncated="Boolean(toolCall.argsTruncated)"
+        height="15rem"
+      />
       <!-- 参数区（可折叠） -->
-      <div v-if="displayParams.length > 0" class="mb-3 last:mb-0">
+      <div v-else-if="displayParams.length > 0" class="mb-3 last:mb-0">
         <button
           class="flex items-center gap-1.5 text-xs font-medium text-gray-500 bg-transparent border-none p-0 cursor-pointer transition-colors duration-200 hover:text-gray-700"
           @click="paramsExpanded = !paramsExpanded"
@@ -681,6 +823,10 @@ function getSqlTokenClass(type: string): string {
         </div>
         <div class="text-sm text-red-600 whitespace-pre-wrap break-words">{{ visibleError }}</div>
       </div>
+      <div v-else-if="isCancelled" class="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
+        <i class="fa-solid fa-circle-stop text-xs"></i>
+        <span>{{ toolCall.result || '任务已停止，工具未执行完成。' }}</span>
+      </div>
     </div>
 
     <!-- 保存到看板弹窗 -->
@@ -713,5 +859,55 @@ function getSqlTokenClass(type: string): string {
 
 .animate-pulse {
   animation: pulse 2s ease-in-out infinite;
+}
+
+/* 参数预览复用 Markdown 代码块，但收进工具卡的紧凑边框内：去掉内层双边框，长 JSON 自动换行。 */
+.tool-args-preview :deep(.conversation-markdown) {
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: #475569;
+}
+
+.tool-args-preview :deep(.conversation-markdown pre) {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  overflow: visible;
+  white-space: pre-wrap;
+}
+
+.tool-args-preview :deep(.conversation-markdown pre code) {
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: #475569;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+/* 子智能体任务书预览：按正文 Markdown 渲染，保持标题/列表/代码块可读。 */
+.tool-description-preview :deep(.conversation-markdown) {
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.65;
+  color: #334155;
+}
+
+.tool-description-preview :deep(.conversation-markdown p) {
+  margin-bottom: 6px;
+}
+
+.tool-description-preview :deep(.conversation-markdown pre) {
+  white-space: pre-wrap;
+}
+
+.tool-description-preview :deep(.conversation-markdown pre code) {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 </style>

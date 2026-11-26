@@ -151,7 +151,7 @@ def test_plugin_skill_rows_skips_unreadable_and_empty_metadata(tmp_path, monkeyp
     monkeypatch.setattr(
         plugins_loader,
         "enabled_plugin_skill_sources",
-        lambda: [("bad-skill", tmp_path / "bad"), ("empty-skill", tmp_path / "empty")],
+        lambda username="": [("bad-skill", tmp_path / "bad"), ("empty-skill", tmp_path / "empty")],
     )
 
     def fake_parse(path):

@@ -20,12 +20,14 @@ export const toGenerationStats = (raw: unknown): MessageGenerationStats | null =
   const cachedInputTokens = Math.floor(Number(record.cached_input_tokens) || 0)
   const cacheHitRate = Number(record.cache_hit_rate)
   const model = typeof record.model === 'string' ? record.model.trim() : ''
+  const supersteps = Math.floor(Number(record.supersteps) || 0)
+  const recursionLimit = Math.floor(Number(record.recursion_limit) || 0)
   const hasDecodeStats =
     outputTokens > 0 &&
     Number.isFinite(durationMs) && durationMs > 0 &&
     Number.isFinite(tokensPerSecond) && tokensPerSecond > 0
   const hasTotalDuration = Number.isFinite(totalDurationMs) && totalDurationMs > 0
-  if (!hasDecodeStats && !hasTotalDuration) return null
+  if (!hasDecodeStats && !hasTotalDuration && supersteps <= 0) return null
   return {
     outputTokens: outputTokens > 0 ? outputTokens : undefined,
     durationMs: hasDecodeStats ? durationMs : undefined,
@@ -38,10 +40,12 @@ export const toGenerationStats = (raw: unknown): MessageGenerationStats | null =
     model: model || undefined,
     modelFirstTokenMs:
       Number.isFinite(modelFirstTokenMs) && modelFirstTokenMs > 0 ? modelFirstTokenMs : undefined,
+    supersteps: supersteps > 0 ? supersteps : undefined,
+    recursionLimit: recursionLimit > 0 ? recursionLimit : undefined,
   }
 }
 
-const formatCompactTokens = (value: number): string => {
+export const formatCompactTokens = (value: number): string => {
   if (value >= 1_000_000) {
     const scaled = value / 1_000_000
     return `${scaled >= 100 ? scaled.toFixed(0) : scaled.toFixed(1).replace(/\.0$/, '')}m`
@@ -83,6 +87,9 @@ export interface GenerationStatsRow {
 export const generationStatsRows = (stats: MessageGenerationStats | null): GenerationStatsRow[] => {
   if (!stats) return []
   const rows: GenerationStatsRow[] = []
+  if (typeof stats.supersteps === 'number') {
+    rows.push({ label: '本轮步数', value: formatSuperstepsLabel(stats.supersteps, stats.recursionLimit) })
+  }
   if (typeof stats.inputTokens === 'number') {
     rows.push({ label: '输入总token', value: formatCompactTokens(stats.inputTokens) })
   }
@@ -112,6 +119,14 @@ export const generationStatsRows = (stats: MessageGenerationStats | null): Gener
   }
   if (durationRows[0]) durationRows[0].divider = true
   return [...rows, ...durationRows]
+}
+
+/** 步数短文案：「23 / 1000 步」；上限缺失时只显示「23 步」。 */
+export const formatSuperstepsLabel = (supersteps: number, recursionLimit?: number): string => {
+  if (!Number.isFinite(supersteps) || supersteps <= 0) return ''
+  return recursionLimit && recursionLimit > 0
+    ? `${Math.floor(supersteps)} / ${Math.floor(recursionLimit)} 步`
+    : `${Math.floor(supersteps)} 步`
 }
 
 /** 执行耗时短文案（气泡下方「用时 X」与生成中实时递增共用）：不足 1 分钟显示整秒，超出后「X 分 Y 秒」。 */

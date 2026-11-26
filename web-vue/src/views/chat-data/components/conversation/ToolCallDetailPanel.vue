@@ -4,8 +4,11 @@ import type { PropType } from 'vue'
 import type { ToolCallInfo } from '../../types'
 import { getToolCompactDescription, getToolDisplayName, getDataAnalyzingActionName, getOntologyActionName, formatToolTimingText, parseFileDiffResult, isFileDiffOffloaded } from '../../utils/toolDisplay'
 import { parseQueryResultEnvelope } from '../../utils/semanticTool'
+import { extractFileWritePreview, extractStreamingFileWritePreview } from '../../utils/fileWritePreview'
 import { useToolTiming } from '../../composables/useToolTiming'
 import FileDiffViewer from '../FileDiffViewer.vue'
+import FileWritePreview from './FileWritePreview.vue'
+import FileWriteViewToggle from './FileWriteViewToggle.vue'
 
 // 注意：Props 用运行时声明 + PropType（不用外部类型做 defineProps<T> 泛型），
 // 见 AGENTS.md 4.3 —— chat-data 会被嵌入未安装 typescript 的宿主项目
@@ -47,6 +50,23 @@ const toolDescription = computed(() => {
   return toolCall ? getToolCompactDescription(toolCall.tool_name, toolCall.args || {}) : ''
 })
 
+const isGenerating = computed(() => props.toolCall?.status === 'generating')
+const argsStreaming = computed(() => Boolean(props.toolCall?.argsStreaming && props.toolCall?.argsText))
+const argsPreviewText = computed(() => props.toolCall?.argsText || '')
+// 写入类工具：参数视图保持原样，另提供按文件类型渲染的内容视图。
+const writePreview = computed(() => extractFileWritePreview(
+  props.toolCall?.tool_name || '',
+  props.toolCall?.args || {},
+))
+const streamingWritePreview = computed(() => (
+  argsStreaming.value
+    ? extractStreamingFileWritePreview(props.toolCall?.tool_name || '', argsPreviewText.value)
+    : null
+))
+const activeWritePreview = computed(() => writePreview.value || streamingWritePreview.value)
+const writeViewMode = ref<'formatted' | 'params'>('formatted')
+const showWriteViewToggle = computed(() => Boolean(activeWritePreview.value))
+
 const paramsExpanded = ref(true)
 const resultExpanded = ref(true)
 
@@ -55,6 +75,7 @@ watch(
   () => {
     paramsExpanded.value = true
     resultExpanded.value = true
+    writeViewMode.value = 'formatted'
   }
 )
 
@@ -80,7 +101,11 @@ const executionScopeText = computed(() => {
 const toolResult = computed(() => {
   const toolCall = props.toolCall
   if (!toolCall) return ''
-  const fallback = toolCall.status === 'completed' ? '已完成，工具未返回文本内容。' : '执行中...'
+  const fallback = toolCall.status === 'completed'
+    ? '已完成，工具未返回文本内容。'
+    : toolCall.status === 'cancelled'
+      ? '任务已停止，工具未返回完成结果。'
+      : '执行中...'
   return props.formatText(prettyJsonIfPossible(toolCall.result || fallback))
 })
 
@@ -90,6 +115,7 @@ const STATUS_META: Record<ToolCallInfo['status'], { label: string; className: st
   running: { label: '执行中', className: 'text-[#1f82d9]' },
   completed: { label: '已完成', className: 'text-emerald-600' },
   error: { label: '执行失败', className: 'text-red-500' },
+  cancelled: { label: '已停止', className: 'text-slate-500' },
 }
 const statusMeta = computed(() => STATUS_META[props.toolCall?.status || 'running'])
 const { durationText } = useToolTiming(() => props.toolCall?.started_at_ms, () => props.toolCall?.ended_at_ms)
@@ -108,7 +134,22 @@ const hasTiming = computed(() => Boolean(props.toolCall?.started_at_ms || props.
 
     <div class="divide-y divide-slate-100">
       <section>
+        <div v-if="showWriteViewToggle" class="flex w-full items-center justify-between gap-3 px-4 py-3">
+          <button
+            type="button"
+            class="flex min-w-0 items-center gap-2 text-left text-xs font-medium text-slate-500 transition-colors hover:text-slate-700"
+            @click="paramsExpanded = !paramsExpanded"
+          >
+            <span>参数</span>
+            <i
+              class="fa-solid fa-chevron-right text-[10px] text-slate-300 transition-transform"
+              :class="{ 'rotate-90': paramsExpanded }"
+            ></i>
+          </button>
+          <FileWriteViewToggle v-model="writeViewMode" />
+        </div>
         <button
+          v-else
           type="button"
           class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left text-xs font-medium text-slate-500 transition-colors hover:bg-slate-50"
           @click="paramsExpanded = !paramsExpanded"
@@ -120,12 +161,22 @@ const hasTiming = computed(() => Boolean(props.toolCall?.started_at_ms || props.
           ></i>
         </button>
         <div v-if="paramsExpanded" class="px-4 pb-4">
-          <pre class="m-0 max-h-[40vh] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-slate-50 p-3 text-xs leading-relaxed text-slate-700">{{ formatJson(toolCall.args) }}</pre>
+          <div v-if="argsStreaming && toolCall.argsTruncated" class="mb-2 text-[11px] text-slate-400">预览已截断</div>
+          <FileWritePreview
+            v-if="activeWritePreview && writeViewMode === 'formatted'"
+            :path="activeWritePreview.path"
+            :content="activeWritePreview.content"
+            :action="activeWritePreview.action"
+            :streaming="argsStreaming"
+            :truncated="Boolean(toolCall.argsTruncated)"
+            height="40vh"
+          />
+          <pre v-else class="m-0 max-h-[40vh] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-slate-50 p-3 text-xs leading-relaxed text-slate-700">{{ argsStreaming ? argsPreviewText : formatJson(toolCall.args) }}</pre>
           <div v-if="executionScopeText" class="mt-2 text-xs text-slate-500">实际执行数据源：{{ executionScopeText }}</div>
         </div>
       </section>
 
-      <section>
+      <section v-if="!isGenerating">
         <button
           type="button"
           class="flex w-full items-center justify-between gap-3 px-4 py-3 text-left text-xs font-medium text-slate-500 transition-colors hover:bg-slate-50"

@@ -12,8 +12,8 @@ from langchain_core.messages import AIMessage
 
 from apps.chat_data_app.agent import data_agent
 from apps.chat_data_app.agent.agent_state import ChatDataAgentState
+from apps.chat_data_app.agent.contracts.business_context import BusinessContext
 from apps.chat_data_app.agent.data_agent import (
-    DatasourceContext,
     IdentityContext,
     ModelInvocationConfig,
     assemble_tools,
@@ -31,10 +31,10 @@ def _runtime(tmp_path):
     ), AgentRuntimeOptions(workspace_backend="local")
 
 
-def test_chat_data_agent_state_exposes_execution_and_workspace_context():
+def test_chat_data_agent_state_exposes_workspace_context_only():
     annotations = ChatDataAgentState.__annotations__
 
-    assert "execution_context" in annotations
+    assert "execution_context" not in annotations
     assert "workspace" in annotations
     assert "semantic_config_id" not in annotations
     assert "conversation_id" in annotations
@@ -52,7 +52,7 @@ def test_assemble_tools_skips_disabled_bash(tmp_path):
             options,
             runtime,
             identity_context=IdentityContext(user_id="u1", operator_name="测试用户"),
-            datasource_context=DatasourceContext(datasource_id="ds_a"),
+            business_context=BusinessContext(values={"datasource_id": "ds_a"}),
         )
     ]
     assert tool_names == [
@@ -70,6 +70,7 @@ def test_assemble_tools_skips_disabled_bash(tmp_path):
         "dir_delete",
         "parse_document",
         "read_image",
+        "data2image",
         "present_artifacts",
         "get_current_time",
         "load_skill",
@@ -107,7 +108,7 @@ def test_create_data_agent_uses_standard_middleware_without_model_fallback(monke
         options,
         workspace_runtime=runtime,
         identity_context=IdentityContext(),
-        datasource_context=DatasourceContext(datasource_id="ds_a"),
+        business_context=BusinessContext(values={"datasource_id": "ds_a"}),
         model_invocation=ModelInvocationConfig(system_prompt="system", model_id="primary-model"),
     )
 
@@ -148,7 +149,7 @@ def test_create_data_agent_registers_after_model_history_middleware(monkeypatch,
         options,
         workspace_runtime=runtime,
         identity_context=IdentityContext(),
-        datasource_context=DatasourceContext(datasource_id="ds_a"),
+        business_context=BusinessContext(values={"datasource_id": "ds_a"}),
         model_invocation=ModelInvocationConfig(system_prompt="system", model_id="primary-model"),
         persist_model_snapshot=persist_snapshot,
     )
@@ -187,7 +188,7 @@ def test_create_data_agent_registers_subagent_middleware_when_enabled(monkeypatc
         options,
         workspace_runtime=runtime,
         identity_context=IdentityContext(),
-        datasource_context=DatasourceContext(datasource_id="ds_a"),
+        business_context=BusinessContext(values={"datasource_id": "ds_a"}),
         model_invocation=ModelInvocationConfig(system_prompt="system", model_id="primary-model"),
     )
 
@@ -237,17 +238,18 @@ def test_build_subagent_middleware_explore_excludes_write_tools(monkeypatch, tmp
     assert spec.model is model
 
 
-def test_build_subagent_middleware_plan_keeps_only_inventory_tools(monkeypatch, tmp_path):
+def test_build_subagent_middleware_general_keeps_read_write_tools(monkeypatch, tmp_path):
     from apps.chat_data_app.agent.data_agent import build_subagent_middleware
     from apps.chat_data_app.agent.middleware import subagents as subagents_module
 
     monkeypatch.setattr(data_agent, "create_streaming_chat_model", lambda **_kwargs: object())
     monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: SimpleNamespace())
-    options = AgentRuntimeOptions(workspace_backend="local", plan_subagent_enabled=True)
+    options = AgentRuntimeOptions(workspace_backend="local", general_subagent_enabled=True)
     tools = [
         SimpleNamespace(name="file_read"),
         SimpleNamespace(name="file_write"),
         SimpleNamespace(name="bash_run"),
+        SimpleNamespace(name="subagent"),
         SimpleNamespace(name="officecli_run"),
         SimpleNamespace(name="ask_user_question"),
         SimpleNamespace(name="present_artifacts"),
@@ -257,11 +259,80 @@ def test_build_subagent_middleware_plan_keeps_only_inventory_tools(monkeypatch, 
     middleware = build_subagent_middleware(options, tools, model=model)
 
     assert middleware is not None
-    assert _subagent_spec_names(middleware) == ["plan"]
+    assert _subagent_spec_names(middleware) == ["general"]
     spec = middleware.specs[0]
-    # plan 只保留盘点与计划落盘工具：执行类工具（bash/officecli）与人工应答/产物呈现全部扣除
-    assert [tool.name for tool in spec.tools] == ["file_read", "file_write"]
+    # general 保留读写与办公执行工具；bash、嵌套派发、人工应答与产物呈现全部扣除
+    assert [tool.name for tool in spec.tools] == ["file_read", "file_write", "officecli_run"]
     assert spec.model is model
+
+
+def test_build_subagent_middleware_general_inherits_dynamic_tools(monkeypatch, tmp_path):
+    from apps.chat_data_app.agent.data_agent import build_subagent_middleware
+    from apps.chat_data_app.agent.middleware import subagents as subagents_module
+
+    monkeypatch.setattr(data_agent, "create_streaming_chat_model", lambda **_kwargs: object())
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: SimpleNamespace())
+    options = AgentRuntimeOptions(workspace_backend="local", general_subagent_enabled=True)
+    tools = [
+        SimpleNamespace(name="file_read"),
+        SimpleNamespace(name="mcp_crm_lookup"),
+        SimpleNamespace(name="mcp_tool_search"),
+        SimpleNamespace(name="mcp_tool_call"),
+        SimpleNamespace(name="write_todos"),
+    ]
+
+    middleware = build_subagent_middleware(options, tools, model=object())
+
+    assert middleware is not None
+    assert _subagent_spec_names(middleware) == ["general"]
+    # 动态 MCP 实体工具默认继承；检索网关依赖主图发现中间件，不能进入子图。
+    assert [tool.name for tool in middleware.specs[0].tools] == ["file_read", "mcp_crm_lookup"]
+
+
+def test_build_subagent_middleware_general_excludes_ask_tools(monkeypatch, tmp_path):
+    from apps.chat_data_app.agent.data_agent import build_subagent_middleware
+    from apps.chat_data_app.agent.middleware import subagents as subagents_module
+
+    monkeypatch.setattr(data_agent, "create_streaming_chat_model", lambda **_kwargs: object())
+    monkeypatch.setattr(subagents_module, "_compile_subagent", lambda spec, run_controls=None: SimpleNamespace())
+    options = AgentRuntimeOptions(workspace_backend="local", general_subagent_enabled=True)
+    tools = [
+        SimpleNamespace(name="file_read"),
+        SimpleNamespace(name="mcp_secret_write"),
+    ]
+
+    middleware = build_subagent_middleware(
+        options,
+        tools,
+        model=object(),
+        approval_policies={"file_read": "allow", "mcp_secret_write": "ask"},
+    )
+
+    assert middleware is not None
+    # 默认继承也必须服从审批边界：ask 档 MCP 工具在子图不可交互，直接剔除。
+    assert [tool.name for tool in middleware.specs[0].tools] == ["file_read"]
+
+
+def test_subagent_type_descriptions_explain_mcp_boundary():
+    """主智能体选型依据：general 可调用 MCP，explore 不挂 MCP。"""
+    from apps.chat_data_app.agent.data_agent import (
+        EXPLORE_SUBAGENT_DESCRIPTION,
+        GENERAL_SUBAGENT_DESCRIPTION,
+    )
+    from apps.chat_data_app.agent.middleware.subagents import _default_system_prompt
+    from apps.chat_data_app.agent.prompts.chat_data import (
+        EXPLORE_SUBAGENT_PROMPT,
+        GENERAL_SUBAGENT_PROMPT,
+    )
+
+    assert "不能调用 MCP 工具" in EXPLORE_SUBAGENT_DESCRIPTION
+    assert "可调用已接入的 MCP 实体工具" in GENERAL_SUBAGENT_DESCRIPTION
+    prompt = _default_system_prompt()
+    # MCP 能力边界由工具描述里的类型清单承载，提示词只留选型判断，避免同义重复。
+    assert "依赖 MCP 数据或需要落盘产出的派 general" in prompt
+    assert "只做只读事实核对派 explore" in prompt
+    assert "需要 general 子智能体" in EXPLORE_SUBAGENT_PROMPT
+    assert "你会继承这些工具" in GENERAL_SUBAGENT_PROMPT
 
 
 def test_build_subagent_middleware_supports_all_specs(monkeypatch, tmp_path):
@@ -273,7 +344,7 @@ def test_build_subagent_middleware_supports_all_specs(monkeypatch, tmp_path):
     options = AgentRuntimeOptions(
         workspace_backend="local",
         explore_subagent_enabled=True,
-        plan_subagent_enabled=True,
+        general_subagent_enabled=True,
     )
     tools = [
         SimpleNamespace(name="file_read"),
@@ -285,15 +356,18 @@ def test_build_subagent_middleware_supports_all_specs(monkeypatch, tmp_path):
     middleware = build_subagent_middleware(options, tools, model=model)
 
     assert middleware is not None
-    assert _subagent_spec_names(middleware) == ["explore", "plan"]
-    # 同一工具列表按各自白名单独立过滤：explore 不含写工具，plan 只留盘点与计划落盘，
+    assert _subagent_spec_names(middleware) == ["explore", "general"]
+    # 同一工具列表按各自白名单独立过滤：explore 不含写工具，general 可读写工作区，
     explore_tools = [tool.name for tool in middleware.specs[0].tools]
-    plan_tools = [tool.name for tool in middleware.specs[1].tools]
+    general_tools = [tool.name for tool in middleware.specs[1].tools]
     assert explore_tools == ["file_read"]
-    assert plan_tools == ["file_read", "file_write"]
-    # task 工具描述中列出全部类型
+    assert general_tools == ["file_read", "file_write"]
+    # 即使主图工具列表里带了 subagent，也不能透传给子图——否则会形成无限嵌套派发。
+    assert "subagent" not in explore_tools
+    assert "subagent" not in general_tools
+    # subagent 工具描述中列出全部类型
     assert "explore" in middleware.tools[0].description
-    assert "plan" in middleware.tools[0].description
+    assert "general" in middleware.tools[0].description
 
 
 @pytest.mark.asyncio
@@ -417,7 +491,7 @@ def test_create_data_agent_registers_mcp_search_and_proxy(monkeypatch, tmp_path)
         options,
         workspace_runtime=runtime,
         identity_context=IdentityContext(),
-        datasource_context=DatasourceContext(datasource_id="ds_a"),
+        business_context=BusinessContext(values={"datasource_id": "ds_a"}),
         model_invocation=ModelInvocationConfig(system_prompt="system", model_id="primary-model"),
     )
 
@@ -444,7 +518,7 @@ def test_create_data_agent_unattended_keeps_allow_system_tools(monkeypatch, tmp_
         options,
         workspace_runtime=runtime,
         identity_context=IdentityContext(),
-        datasource_context=DatasourceContext(datasource_id="ds_a"),
+        business_context=BusinessContext(values={"datasource_id": "ds_a"}),
         model_invocation=ModelInvocationConfig(system_prompt="system", model_id="primary-model"),
         run_controls=AgentRunControls(disable_user_interaction=True),
     )
@@ -465,7 +539,7 @@ def test_describe_agent_assembly_exposes_resolved_tools_and_middleware(monkeypat
         data_agent.CHAT_DATA_AGENT_SPEC,
         options,
         identity_context=IdentityContext(user_id="u1"),
-        datasource_context=DatasourceContext(datasource_id="ds_a"),
+        business_context=BusinessContext(values={"datasource_id": "ds_a"}),
         model_invocation=ModelInvocationConfig(system_prompt="system"),
         workspace_runtime=runtime,
     )

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -30,6 +31,20 @@ def _load_json(value: Any) -> Any:
         return None
 
 
+@dataclass(frozen=True)
+class ActionExecutionOptions:
+    """执行审计中较少使用的扩展字段，避免 DAO 主入口参数继续膨胀。"""
+
+    conflict_check_level: str = "object"
+    isolation_level: str = "legacy_equivalent"
+    revert_of_execution_id: int = 0
+    status: str = "succeeded"
+    error_message: str = ""
+
+
+_DEFAULT_ACTION_EXECUTION_OPTIONS = ActionExecutionOptions()
+
+
 class OntologyActionExecutionDao:
     """执行审计与属性覆盖值读写；写方法需在 transaction_scope 内与编辑一起提交。"""
 
@@ -48,11 +63,7 @@ class OntologyActionExecutionDao:
         compiled_edits: dict[str, Any] | None = None,
         idempotency_key: str = "",
         baseline: dict[str, Any] | None = None,
-        conflict_check_level: str = "object",
-        isolation_level: str = "legacy_equivalent",
-        revert_of_execution_id: int = 0,
-        status: str = "succeeded",
-        error_message: str = "",
+        options: ActionExecutionOptions = _DEFAULT_ACTION_EXECUTION_OPTIONS,
     ) -> dict[str, Any]:
         async with session_scope() as session:
             row = ChatDataOntologyActionExecution(
@@ -65,12 +76,12 @@ class OntologyActionExecutionDao:
                 edits_json=json.dumps(edits, ensure_ascii=False),
                 compiled_edits_json=json.dumps(compiled_edits or {}, ensure_ascii=False),
                 baseline_json=json.dumps(baseline, ensure_ascii=False) if baseline else None,
-                conflict_check_level=_text(conflict_check_level) or "object",
-                isolation_level=_text(isolation_level) or "legacy_equivalent",
+                conflict_check_level=_text(options.conflict_check_level) or "object",
+                isolation_level=_text(options.isolation_level) or "legacy_equivalent",
                 idempotency_key=_text(idempotency_key)[:64],
-                execution_status=_text(status) or "succeeded",
-                error_message=_text(error_message)[:1000],
-                revert_of_execution_id=int(revert_of_execution_id or 0),
+                execution_status=_text(options.status) or "succeeded",
+                error_message=_text(options.error_message)[:1000],
+                revert_of_execution_id=int(options.revert_of_execution_id or 0),
                 create_by=operator,
                 create_by_name=operator_name,
             )

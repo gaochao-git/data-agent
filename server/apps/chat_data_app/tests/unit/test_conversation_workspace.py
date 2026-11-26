@@ -18,7 +18,8 @@ from pathlib import Path
 import pytest
 from langchain_core.messages import HumanMessage
 
-from apps.chat_data_app.agent.data_agent import DatasourceContext, assemble_tools
+from apps.chat_data_app.agent.contracts.business_context import BusinessContext
+from apps.chat_data_app.agent.data_agent import assemble_tools
 from apps.chat_data_app.agent.runtime_options import AgentRuntimeOptions
 from apps.chat_data_app.agent.tools.common import normalize_json_like_payload
 from apps.chat_data_app.agent.workspace import runtime as workspace_runtime_module
@@ -40,6 +41,7 @@ from apps.chat_data_app.agent.workspace import (
 from apps.chat_data_app.agent.workspace import (
     workspace_search as we_search,  # noqa: F401  # 测试按模块属性引用 workspace_search，属有意重导出
 )
+from apps.chat_data_app.agent.workspace.runtime_skill_snapshot import runtime_skills_snapshot_dir_from_workspace
 from apps.chat_data_app.agent.workspace.workspace_ops import _artifact_payload_from_bytes
 from apps.chat_data_app.agent.workspace.workspace_special_services import (
     WorkspaceOfficePreviewService,
@@ -51,14 +53,21 @@ from apps.chat_data_app.services.agent_run.conversation_workspace import (
     _render_local_office_html,
     create_workspace_backend,
     ensure_conversation_workspace,
+    list_workspace_directories,
     list_workspace_files,
     read_workspace_text_file,
     resolve_workspace_path,
+    save_workspace_text_file,
     to_visible_path,
     workspace_runtime_from_state,
 )
 from apps.chat_data_app.services.semantic.run import semantic_query_service
 from utils import tool_result_store
+from utils.storage_paths import (
+    conversation_semantic_dir_from_workspace,
+    conversation_semantic_ref_path,
+    semantic_cache_dir,
+)
 
 sql_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.data_analyzing")
 present_artifacts_tool_module = importlib.import_module("apps.chat_data_app.agent.tools.present_artifacts")
@@ -78,12 +87,12 @@ def _isolated_workspace(
 def test_workspace_runtime_from_state_rebuilds_runtime_context(tmp_path):
     runtime = workspace_runtime_from_state(
         {
-            "user_id": "u1",
             "workspace": {
                 "workspace_root": str(tmp_path),
                 "workspace_backend": "local",
             },
-        }
+        },
+        user_id="u1",
     )
 
     assert runtime.workspace_root == str(tmp_path)
@@ -140,6 +149,9 @@ async def test_runtime_rejects_execution_for_file_only_backend(tmp_path):
         async def write_text_file(self, *_args, **_kwargs):
             return {}
 
+        async def write_binary_file(self, *_args, **_kwargs):
+            return {}
+
         async def replace_text_file(self, *_args, **_kwargs):
             return {}
 
@@ -172,10 +184,10 @@ async def test_runtime_rejects_execution_for_file_only_backend(tmp_path):
     with pytest.raises(ValueError, match="不支持命令执行"):
         await runtime.run_bash(command="pwd", cwd="workspace", timeout_seconds=1)
     with pytest.raises(ValueError, match="不支持语义模型物料化"):
-        await runtime.write_internal_text_files([("/mnt/user-data/workspace/semantic/model.yaml", "model")])
+        await runtime.write_internal_text_files([("/mnt/user-data/workspace/.system/semantic/model.yaml", "model")])
     with pytest.raises(ValueError, match="不支持隐藏工具结果存储"):
         await runtime.write_tool_result(
-            file_path="/mnt/user-data/outputs/.tool-offload/result.txt",
+            file_path="/mnt/user-data/workspace/.system/tool-offload/result.txt",
             content="result",
         )
     with pytest.raises(ValueError, match="不支持产物读取"):
@@ -195,7 +207,7 @@ def _create_local_workspace_tools(_monkeypatch, paths, **kwargs):
         for tool in assemble_tools(
             AgentRuntimeOptions(),
             runtime,
-            datasource_context=DatasourceContext(datasource_id=kwargs.pop("datasource_id", None)),
+            business_context=BusinessContext(values={"datasource_id": kwargs.pop("datasource_id", None)}),
             **kwargs,
         )
     }
@@ -204,17 +216,10 @@ def _create_local_workspace_tools(_monkeypatch, paths, **kwargs):
 def _analysis_query_state(
     paths,
     *,
-    datasource_id: str | None = "ds_1",
-    member_datasource_ids: list[str] | None = None,
     conversation_id: str | None = None,
     user_query: str = "统计销售额",
 ) -> dict:
     return {
-        "execution_context": {
-            "datasource_id": datasource_id,
-            "available_member_datasource_ids": member_datasource_ids or ["m1"],
-            "matched_member_datasource_ids": [],
-        },
         "user_id": "system",
         "conversation_id": conversation_id,
         "workspace": {"workspace_root": paths["root"], "workspace_backend": "local"},
@@ -222,7 +227,8 @@ def _analysis_query_state(
     }
 
 
-def test_ensure_conversation_workspace_creates_expected_dirs():
+def test_ensure_conversation_workspace_creates_expected_dirs(tmp_path, monkeypatch):
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
     paths = ensure_conversation_workspace("conv_workspace_test", "user_a")
 
     date_str = datetime.now().strftime("%Y-%m-%d")
@@ -231,9 +237,10 @@ def test_ensure_conversation_workspace_creates_expected_dirs():
     assert Path(paths["workspace"]).exists()
     assert Path(paths["outputs"]).exists()
     assert Path(paths["uploads"]).exists()
-    assert (Path(paths["outputs"]) / ".tool-offload").exists()
-    # 运行域技能快照目录随工作区一并创建（扁平 /mnt/skills/<name> 快照），但不进入 paths 字典
-    assert (Path(paths["root"]).parent / "runtime-skills").is_dir()
+    assert (Path(paths["workspace"]) / ".system" / "tool-offload").exists()
+    # 技能快照按用户/技能集合哈希共享，不在会话目录预建，也不进入 paths 字典
+    assert not runtime_skills_snapshot_dir_from_workspace(paths["root"]).exists()
+    assert not (Path(paths["root"]).parent / "runtime-skills").exists()
     assert "runtime_skills" not in paths
 
 
@@ -310,12 +317,14 @@ def test_resolve_workspace_path_restricts_writes():
     with pytest.raises(ValueError):
         resolve_workspace_path(paths["root"], "other-files/demo/SKILL.md", writable=True)
     with pytest.raises(ValueError):
-        resolve_workspace_path(paths["root"], "/mnt/user-data/outputs/.tool-offload/private.json", writable=True)
+        resolve_workspace_path(
+            paths["root"], "/mnt/user-data/workspace/.system/tool-offload/private.json", writable=True
+        )
     with pytest.raises(ValueError, match="语义模型只读快照"):
-        resolve_workspace_path(paths["root"], "/mnt/user-data/workspace/semantic/model.yaml", writable=True)
+        resolve_workspace_path(paths["root"], "/mnt/user-data/workspace/.system/semantic/model.yaml", writable=True)
     snapshot = resolve_workspace_path(
         paths["root"],
-        "/mnt/user-data/workspace/semantic/model.yaml",
+        "/mnt/user-data/workspace/.system/semantic/model.yaml",
         writable=True,
         allow_managed_semantic_model_write=True,
     )
@@ -327,20 +336,169 @@ async def test_internal_semantic_model_write_overwrites_only_selected_file(tmp_p
     monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
     monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
     paths = ensure_conversation_workspace("conv_semantic_replace", "user_a")
-    semantic_root = Path(paths["workspace"]) / "semantic"
-    semantic_root.mkdir()
+    semantic_root = conversation_semantic_dir_from_workspace(paths["root"])
+    semantic_root.mkdir(parents=True, exist_ok=True)
     (semantic_root / "old.yaml").write_text("old", encoding="utf-8")
     runtime = ConversationWorkspaceRuntime(workspace_root=paths["root"], user_id="user_a", backend="local")
 
     result = await runtime.write_internal_text_files(
         [
-            ("/mnt/user-data/workspace/semantic/new.yaml", "new"),
+            ("/mnt/user-data/workspace/.system/semantic/new.yaml", "new"),
         ]
     )
 
     assert (semantic_root / "old.yaml").read_text(encoding="utf-8") == "old"
     assert (semantic_root / "new.yaml").read_text(encoding="utf-8") == "new"
-    assert result[0]["file_path"] == "/mnt/user-data/workspace/semantic/new.yaml"
+    assert result[0]["file_path"] == "/mnt/user-data/workspace/.system/semantic/new.yaml"
+
+
+@pytest.mark.asyncio
+async def test_semantic_cache_shared_by_datasource_and_config(tmp_path, monkeypatch):
+    """同一数据源/权限/配置的语义缓存跨会话共享。"""
+    monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
+    first_paths = ensure_conversation_workspace("conv_semantic_shared_a", "user_a")
+    second_paths = ensure_conversation_workspace("conv_semantic_shared_b", "user_a")
+    first = ConversationWorkspaceRuntime(workspace_root=first_paths["root"], user_id="user_a")
+    second = ConversationWorkspaceRuntime(workspace_root=second_paths["root"], user_id="user_a")
+
+    expected = first.activate_semantic_cache(datasource_id="ds_a")
+    second.activate_semantic_cache(datasource_id="ds_a")
+    await first.write_internal_text_files([("/mnt/user-data/workspace/.system/semantic/shared.yaml", "shared: true")])
+
+    assert conversation_semantic_dir_from_workspace(first_paths["root"]) == expected
+    assert conversation_semantic_dir_from_workspace(second_paths["root"]) == expected
+    assert (expected / "shared.yaml").read_text(encoding="utf-8") == "shared: true"
+    assert (
+        await second.read_text_file(
+            file_path="/mnt/user-data/workspace/.system/semantic/shared.yaml", offset=0, limit=10, max_chars=100
+        )
+    )["lines"] == ["shared: true"]
+
+
+def test_workspace_path_mapping_translates_semantic_cache():
+    """bash 通道的 semantic 虚拟路径必须映射到本地缓存，而不是共享工作区。"""
+    workspace_root = "/tmp/chat_cache_map/threads/u1/2026-11-11/c1/user-data"
+    runtime = ConversationWorkspaceRuntime(workspace_root=workspace_root, user_id="u1")
+    runtime.activate_semantic_cache(datasource_id="ds_a")
+    mapping = workspace_runtime_module.WorkspacePathMapping(workspace_root=workspace_root)
+
+    translated = mapping.translate("cat /mnt/user-data/workspace/.system/semantic/a.yaml")
+    expected = str(conversation_semantic_dir_from_workspace(workspace_root) / "a.yaml")
+
+    assert expected in translated
+    assert mapping.mask(translated) == "cat /mnt/user-data/workspace/.system/semantic/a.yaml"
+
+
+def test_semantic_path_handles_symlinked_shared_root(tmp_path, monkeypatch):
+    """共享根经符号链接配置时，语义路径反推不能抛 ValueError。"""
+    real_root = tmp_path / "real-root"
+    real_root.mkdir()
+    linked_root = tmp_path / "root-link"
+    try:
+        linked_root.symlink_to(real_root, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("当前平台不支持目录符号链接")
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", linked_root / "threads")
+    workspace_root = linked_root / "threads" / "user_a" / "2026-11-11" / "c1" / "user-data"
+    workspace_root.mkdir(parents=True)
+
+    assert conversation_semantic_dir_from_workspace(str(workspace_root)).is_absolute()
+
+
+def test_to_visible_path_semantic_root_is_canonical(tmp_path, monkeypatch):
+    """语义缓存目录本身的可见路径不能含 '.' 段（会被 _assert_canonical 拒绝）。"""
+    monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
+    paths = ensure_conversation_workspace("conv_visible_semantic_root", "user_a")
+    runtime = ConversationWorkspaceRuntime(workspace_root=paths["root"], user_id="user_a")
+    semantic_root = runtime.activate_semantic_cache(datasource_id="ds_a")
+
+    assert to_visible_path(paths["root"], semantic_root) == "/mnt/user-data/workspace/.system/semantic"
+    assert (
+        to_visible_path(paths["root"], semantic_root / "model.yaml")
+        == "/mnt/user-data/workspace/.system/semantic/model.yaml"
+    )
+
+
+@pytest.mark.asyncio
+async def test_semantic_cache_isolated_between_users(tmp_path, monkeypatch):
+    """同一数据源组下不同用户的语义缓存不能互相共享。"""
+    monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
+    user_a_paths = ensure_conversation_workspace("conv_semantic_user_a", "user_a")
+    user_b_paths = ensure_conversation_workspace("conv_semantic_user_b", "user_b")
+    user_a = ConversationWorkspaceRuntime(workspace_root=user_a_paths["root"], user_id="user_a")
+    user_b = ConversationWorkspaceRuntime(workspace_root=user_b_paths["root"], user_id="user_b")
+
+    a_dir = user_a.activate_semantic_cache(datasource_id="ds_a")
+    b_dir = user_b.activate_semantic_cache(datasource_id="ds_a")
+    await user_a.write_internal_text_files(
+        [("/mnt/user-data/workspace/.system/semantic/private.yaml", "private: true")]
+    )
+
+    assert a_dir != b_dir
+    assert (a_dir / "private.yaml").read_text(encoding="utf-8") == "private: true"
+    assert not (b_dir / "private.yaml").exists()
+
+
+@pytest.mark.asyncio
+async def test_hash_ref_resolves_only_new_layout(tmp_path, monkeypatch):
+    """旧版带 hash 的 ref 不再解析旧共享路径，只按 user + datasource 落到新布局。"""
+    monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
+    paths = ensure_conversation_workspace("conv_semantic_old_ref", "user_a")
+    ref_path = conversation_semantic_ref_path(paths["root"])
+    ref_path.parent.mkdir(parents=True, exist_ok=True)
+    ref_path.write_text('{"datasource_id":"ds_a","scope_hash":"scope_a","config_hash":"cfg_a"}', encoding="utf-8")
+
+    resolved = conversation_semantic_dir_from_workspace(paths["root"])
+
+    assert resolved == semantic_cache_dir("user_a", "ds_a").resolve()
+    assert "scope_a" not in resolved.parts
+    assert "cfg_a" not in resolved.parts
+
+
+@pytest.mark.asyncio
+async def test_legacy_shared_semantic_is_not_readable_or_listed(tmp_path, monkeypatch):
+    """历史会话共享 semantic 目录不再兜底读取、不进入工作区文件列表。"""
+    monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
+    paths = ensure_conversation_workspace("conv_semantic_legacy", "user_a")
+    legacy_root = Path(paths["workspace"]) / "semantic"
+    legacy_root.mkdir()
+    (legacy_root / "legacy.yaml").write_text("legacy: true", encoding="utf-8")
+    runtime = ConversationWorkspaceRuntime(workspace_root=paths["root"], user_id="user_a", backend="local")
+
+    target = resolve_workspace_path(paths["root"], "/mnt/user-data/workspace/.system/semantic/legacy.yaml")
+    assert not target.exists()
+    assert legacy_root not in target.parents
+    read = await runtime.read_text_file(
+        file_path="/mnt/user-data/workspace/.system/semantic/legacy.yaml", offset=0, limit=10, max_chars=100
+    )
+    assert read["exists"] is False
+    assert not any(
+        item["path"].endswith("legacy.yaml") for item in list_workspace_files("conv_semantic_legacy", "user_a")
+    )
+
+
+@pytest.mark.asyncio
+async def test_internal_semantic_model_writes_cache_not_shared_workspace(tmp_path, monkeypatch):
+    """语义模型物化只落本地缓存，不进入共享 user-data。"""
+    monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
+    paths = ensure_conversation_workspace("conv_semantic_cache", "user_a")
+    runtime = ConversationWorkspaceRuntime(workspace_root=paths["root"], user_id="user_a", backend="local")
+
+    await runtime.write_internal_text_files([("/mnt/user-data/workspace/.system/semantic/cache-only.yaml", "a: 1")])
+
+    cache_file = conversation_semantic_dir_from_workspace(paths["root"]) / "cache-only.yaml"
+    assert cache_file.read_text(encoding="utf-8") == "a: 1"
+    assert not (Path(paths["workspace"]) / "semantic" / "cache-only.yaml").exists()
+    assert any(
+        item["path"] == "/mnt/user-data/workspace/.system/semantic/cache-only.yaml"
+        for item in list_workspace_files("conv_semantic_cache", "user_a")
+    )
 
 
 @pytest.mark.asyncio
@@ -349,22 +507,22 @@ async def test_internal_semantic_model_delete_cleans_residual_file(tmp_path, mon
     monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
     monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
     paths = ensure_conversation_workspace("conv_semantic_delete", "user_a")
-    semantic_root = Path(paths["workspace"]) / "semantic"
-    semantic_root.mkdir()
+    semantic_root = conversation_semantic_dir_from_workspace(paths["root"])
+    semantic_root.mkdir(parents=True, exist_ok=True)
     stale = semantic_root / "已停用模型__deadbeef.yaml"
     stale.write_text("stale", encoding="utf-8")
     runtime = ConversationWorkspaceRuntime(workspace_root=paths["root"], user_id="user_a", backend="local")
 
     result = await runtime.delete_internal_text_files(
-        path="/mnt/user-data/workspace/semantic/已停用模型__deadbeef.yaml"
+        path="/mnt/user-data/workspace/.system/semantic/已停用模型__deadbeef.yaml"
     )
 
     assert not stale.exists()
-    assert result["path"] == "/mnt/user-data/workspace/semantic/已停用模型__deadbeef.yaml"
+    assert result["path"] == "/mnt/user-data/workspace/.system/semantic/已停用模型__deadbeef.yaml"
     assert result["type"] == "file"
 
     # 通道限定语义/本体 YAML：semantic、ontology 之外的文件即使走内部通道也必须被拒
-    with pytest.raises(ValueError, match="内部系统写入"):
+    with pytest.raises(ValueError, match="内部语义模型写入"):
         await runtime.delete_internal_text_files(path="/mnt/user-data/workspace/plan.md")
 
 
@@ -374,24 +532,26 @@ async def test_tool_results_are_listed_but_read_only_and_reusable_by_file_read(m
     monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "users")
     monkeypatch.setattr(tool_result_store, "CHAT_DATA_HOME", str(tmp_path))
     paths = ensure_conversation_workspace("conv_private", "user_a")
-    private_file = Path(paths["outputs"]) / ".tool-offload" / "result_1.json"
+    private_file = Path(paths["workspace"]) / ".system" / "tool-offload" / "result_1.json"
     private_file.write_text('{"rows":[1]}', encoding="utf-8")
     runtime = ConversationWorkspaceRuntime(workspace_root=paths["root"], user_id="user_a", backend="local")
 
     assert any(item["name"] == "result_1.json" for item in list_workspace_files("conv_private", "user_a"))
     preview = read_workspace_text_file(
-        "conv_private", "/mnt/user-data/outputs/.tool-offload/result_1.json", user_id="user_a"
+        "conv_private", "/mnt/user-data/workspace/.system/tool-offload/result_1.json", user_id="user_a"
     )
     assert preview["content"] == '{"rows":[1]}'
     result = await runtime.read_text_file(
-        file_path="/mnt/user-data/outputs/.tool-offload/result_1.json",
+        file_path="/mnt/user-data/workspace/.system/tool-offload/result_1.json",
         offset=0,
         limit=10,
         max_chars=100,
     )
     assert result["lines"] == ['{"rows":[1]}']
     with pytest.raises(ValueError):
-        resolve_workspace_path(paths["root"], "/mnt/user-data/outputs/.tool-offload/result_1.json", writable=True)
+        resolve_workspace_path(
+            paths["root"], "/mnt/user-data/workspace/.system/tool-offload/result_1.json", writable=True
+        )
 
 
 def test_get_workspace_total_size_sums_all_four_directories(tmp_path):
@@ -407,13 +567,28 @@ def test_get_workspace_total_size_sums_all_four_directories(tmp_path):
     assert get_workspace_total_size(root) == 20
 
 
+def test_get_workspace_total_size_ignores_legacy_semantic(tmp_path):
+    """历史会话共享 semantic YAML 不再计入工作区占用（也不再上传沙箱）。"""
+    from apps.chat_data_app.services.agent_run.conversation_workspace import get_workspace_total_size
+
+    root = tmp_path / "user-data"
+    for name in ("workspace", "outputs", "uploads", "memory"):
+        (root / name).mkdir(parents=True)
+        (root / name / "a.txt").write_bytes(b"123")
+    legacy_semantic = root / "workspace" / "semantic"
+    legacy_semantic.mkdir()
+    (legacy_semantic / "stale.yaml").write_bytes(b"1234567890")
+
+    assert get_workspace_total_size(root) == 12
+
+
 @pytest.mark.asyncio
 async def test_query_result_is_listed_read_only_and_reusable_by_file_read(monkeypatch, tmp_path):
     monkeypatch.setattr(workspace_runtime_module, "CHAT_DATA_HOME", str(tmp_path))
     monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "users")
     paths = ensure_conversation_workspace("conv_query_result", "user_a")
-    result_file = Path(paths["outputs"]) / "query_result" / "result_1.json"
-    result_file.parent.mkdir()
+    result_file = Path(paths["workspace"]) / ".system" / "query_result" / "result_1.json"
+    result_file.parent.mkdir(parents=True, exist_ok=True)
     result_file.write_text('{\n  "rows": [1, 2]\n}', encoding="utf-8")
     runtime = ConversationWorkspaceRuntime(
         workspace_root=paths["root"],
@@ -428,7 +603,7 @@ async def test_query_result_is_listed_read_only_and_reusable_by_file_read(monkey
     assert any(item["name"] == "result_1.json" for item in listed)
     content = await file_read.ainvoke(
         {
-            "file_path": "/mnt/user-data/outputs/query_result/result_1.json",
+            "file_path": "/mnt/user-data/workspace/.system/query_result/result_1.json",
             "offset": 0,
             "limit": 2,
         }
@@ -437,10 +612,10 @@ async def test_query_result_is_listed_read_only_and_reusable_by_file_read(monkey
     assert "total_lines=3" in content
     assert "     1 {" in content
     assert "has_more=true" in content
-    with pytest.raises(ValueError, match="系统结果目录"):
+    with pytest.raises(ValueError, match="workspace/.system"):
         resolve_workspace_path(
             paths["root"],
-            "/mnt/user-data/outputs/query_result/result_1.json",
+            "/mnt/user-data/workspace/.system/query_result/result_1.json",
             writable=True,
         )
 
@@ -496,7 +671,7 @@ async def test_file_copy_rejects_invalid_source_and_destination(monkeypatch, tmp
     source.write_bytes(b"a")
     existing = Path(paths["workspace"]) / "b.bin"
     existing.write_bytes(b"b")
-    offload = Path(paths["outputs"]) / ".tool-offload" / "r.json"
+    offload = Path(paths["workspace"]) / ".system" / "tool-offload" / "r.json"
     offload.write_text("{}", encoding="utf-8")
     runtime = ConversationWorkspaceRuntime(workspace_root=paths["root"], user_id="user_a", backend="local")
 
@@ -514,7 +689,7 @@ async def test_file_copy_rejects_invalid_source_and_destination(monkeypatch, tmp
         )
     with pytest.raises(ValueError, match="tool-offload"):
         await runtime.copy_path(
-            source_path="/mnt/user-data/outputs/.tool-offload/r.json",
+            source_path="/mnt/user-data/workspace/.system/tool-offload/r.json",
             destination_path="/mnt/user-data/workspace/e.json",
         )
     with pytest.raises(FileNotFoundError):
@@ -524,11 +699,12 @@ async def test_file_copy_rejects_invalid_source_and_destination(monkeypatch, tmp
 
 
 @pytest.mark.asyncio
-async def test_file_copy_accepts_readonly_skill_source_and_keeps_skill_immutable(tmp_path):
+async def test_file_copy_accepts_readonly_skill_source_and_keeps_skill_immutable(tmp_path, monkeypatch):
     """/mnt/skills 只读技能文件可作为 file_copy 源，且技能路径不能作为复制目标。"""
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
     workspace_root = tmp_path / "threads" / "u1" / "conv_skill_copy" / "user-data"
     (workspace_root / "workspace").mkdir(parents=True)
-    skill_dir = workspace_root.parent / "runtime-skills" / "demo-skill"
+    skill_dir = runtime_skills_snapshot_dir_from_workspace(str(workspace_root)) / "demo-skill"
     template = skill_dir / "assets" / "template.pptx"
     template.parent.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text("---\nname: demo-skill\n---\n# demo", encoding="utf-8")
@@ -572,12 +748,21 @@ def test_workspace_json_list_read_and_visible_paths():
         resolve_workspace_path(paths["root"], "././workspace/context.json")
     with pytest.raises(ValueError):
         resolve_workspace_path(paths["root"], "")
-    (Path(paths["outputs"]) / ".tool-offload").rmdir()
+    (Path(paths["workspace"]) / ".system" / "tool-offload").rmdir()
     (Path(paths["root"]) / "outputs").rmdir()
     (Path(paths["workspace"]) / "nested-dir").mkdir()
+    empty_dir = Path(paths["outputs"]) / "123"
+    empty_dir.mkdir(parents=True)
     files = list_workspace_files(conversation_id)
     assert any(
         item["path"] == "/mnt/user-data/workspace/context.json" and item["directory"] == "workspace" for item in files
+    )
+    directories = list_workspace_directories(conversation_id)
+    assert any(
+        item["path"] == "/mnt/user-data/outputs/123"
+        and item["relative_path"] == "outputs/123"
+        and item["directory"] == "outputs"
+        for item in directories
     )
 
     payload = read_workspace_text_file(conversation_id, "/mnt/user-data/workspace/context.json")
@@ -603,13 +788,67 @@ def test_read_workspace_text_file_rejects_missing_and_large_files():
         read_workspace_text_file(conversation_id, "/mnt/user-data/workspace/big.txt", max_bytes=3)
 
 
+def test_save_workspace_text_file_supports_memory_and_regular_text(monkeypatch, tmp_path):
+    conversation_id = f"conv_memory_edit_{uuid.uuid4().hex}"
+    paths = _isolated_workspace(monkeypatch, tmp_path, conversation_id)
+    memory_path = Path(paths["memory"]) / "memory.md"
+    memory_path.write_text("- [口径] 旧值\n", encoding="utf-8")
+    notes_path = Path(paths["workspace"]) / "notes.md"
+    notes_path.write_text("# 旧标题\n", encoding="utf-8")
+
+    payload = save_workspace_text_file(
+        conversation_id,
+        "/mnt/user-data/memory/memory.md",
+        "- [口径] 用户修正后的值\n",
+        memory_path.stat().st_mtime,
+        1024,
+        user_id="user_a",
+    )
+
+    assert payload["path"] == "/mnt/user-data/memory/memory.md"
+    assert payload["bytes"] == len("- [口径] 用户修正后的值\n".encode())
+    assert memory_path.read_text(encoding="utf-8") == "- [口径] 用户修正后的值\n"
+
+    payload = save_workspace_text_file(
+        conversation_id,
+        "/mnt/user-data/workspace/notes.md",
+        "# 新标题\n",
+        notes_path.stat().st_mtime,
+        1024,
+        user_id="user_a",
+    )
+    assert payload["path"] == "/mnt/user-data/workspace/notes.md"
+    assert notes_path.read_text(encoding="utf-8") == "# 新标题\n"
+
+    with pytest.raises(conversation_workspace_module.WorkspaceFileSaveConflictError, match="刷新后重试"):
+        save_workspace_text_file(
+            conversation_id,
+            "/mnt/user-data/workspace/notes.md",
+            "# 过期内容\n",
+            notes_path.stat().st_mtime - 10,
+            1024,
+            user_id="user_a",
+        )
+
+    with pytest.raises(ValueError):
+        save_workspace_text_file(
+            conversation_id,
+            "/mnt/user-data/uploads/private.txt",
+            "x",
+            notes_path.stat().st_mtime,
+            1024,
+            user_id="user_a",
+        )
+
+
 @pytest.mark.asyncio
-async def test_runtime_resolves_system_skill_file_under_system_path(tmp_path):
+async def test_runtime_resolves_system_skill_file_under_system_path(tmp_path, monkeypatch):
     # 运行域技能统一为扁平 /mnt/skills/<name>：直接从本会话快照目录解析，
     # 不再按类别/远程解析 skill_service.resolve_skill_path_async。
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
     workspace_root = tmp_path / "threads" / "u1" / "conv_x" / "user-data"
     workspace_root.mkdir(parents=True)
-    skill_dir = workspace_root.parent / "runtime-skills" / "skill-creator"
+    skill_dir = runtime_skills_snapshot_dir_from_workspace(str(workspace_root)) / "skill-creator"
     doc_path = skill_dir / "references" / "guide.md"
     doc_path.parent.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text("---\nname: skill-creator\n---\n# Skill Creator", encoding="utf-8")
@@ -638,10 +877,11 @@ async def test_runtime_resolves_system_skill_file_under_system_path(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_runtime_rejects_symlinked_skill_directory(tmp_path):
+async def test_runtime_rejects_symlinked_skill_directory(tmp_path, monkeypatch):
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
     workspace_root = tmp_path / "threads" / "u1" / "conv_x" / "user-data"
     workspace_root.mkdir(parents=True)
-    skill_root = workspace_root.parent / "runtime-skills"
+    skill_root = runtime_skills_snapshot_dir_from_workspace(str(workspace_root))
     valid_skill = skill_root / "skill-creator"
     valid_skill.mkdir(parents=True)
     (valid_skill / "SKILL.md").write_text("# Skill Creator", encoding="utf-8")
@@ -962,13 +1202,13 @@ async def test_present_artifacts_rejects_non_artifact(monkeypatch):
 @pytest.mark.asyncio
 async def test_present_artifacts_rejects_hidden_tool_result(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_present_private_{uuid.uuid4().hex}")
-    private_file = Path(paths["outputs"]) / ".tool-offload" / "result_1.json"
+    private_file = Path(paths["workspace"]) / ".system" / "tool-offload" / "result_1.json"
     private_file.write_text('{"rows":[1]}', encoding="utf-8")
     tools = _create_local_workspace_tools(monkeypatch, paths)
 
     result = await tools["present_artifacts"].ainvoke(
         {
-            "files": ["/mnt/user-data/outputs/.tool-offload/result_1.json"],
+            "files": ["/mnt/user-data/workspace/.system/tool-offload/result_1.json"],
         }
     )
 
@@ -977,7 +1217,7 @@ async def test_present_artifacts_rejects_hidden_tool_result(monkeypatch):
     assert payload["artifacts"] == []
     assert payload["errors"] == [
         {
-            "file_path": "/mnt/user-data/outputs/.tool-offload/result_1.json",
+            "file_path": "/mnt/user-data/workspace/.system/tool-offload/result_1.json",
             "error": "文件不是可展示的 outputs 产物",
         }
     ]
@@ -1148,6 +1388,9 @@ async def test_file_read_delegates_to_runtime_backend():
 
         async def write_text_file(self, *_args, **_kwargs):
             raise AssertionError("unexpected write")
+
+        async def write_binary_file(self, *_args, **_kwargs):
+            raise AssertionError("unexpected binary write")
 
         async def write_internal_text_files(self, *_args, **_kwargs):
             raise AssertionError("unexpected internal semantic model write")
@@ -1388,7 +1631,7 @@ async def test_file_glob_recursively_matches_filenames_and_includes_tool_results
     (Path(paths["workspace"]) / "reports" / "daily").mkdir(parents=True)
     (Path(paths["workspace"]) / "reports" / "daily" / "sales.json").write_text("{}", encoding="utf-8")
     (Path(paths["workspace"]) / "summary.json").write_text("{}", encoding="utf-8")
-    hidden = Path(paths["outputs"]) / ".tool-offload" / "query.json"
+    hidden = Path(paths["workspace"]) / ".system" / "tool-offload" / "query.json"
     hidden.write_text("{}", encoding="utf-8")
 
     result = await tools["file_glob"].ainvoke(
@@ -1400,18 +1643,21 @@ async def test_file_glob_recursively_matches_filenames_and_includes_tool_results
 
     payload = json.loads(result.replace("[file_glob]\n", "", 1))
     assert payload["entries"] == [
+        {"path": "/mnt/user-data/workspace/.system/tool-offload/query.json", "type": "file"},
         {"path": "/mnt/user-data/workspace/reports/daily/sales.json", "type": "file"},
         {"path": "/mnt/user-data/workspace/summary.json", "type": "file"},
     ]
 
     offload_result = await tools["file_glob"].ainvoke(
         {
-            "path": "/mnt/user-data/outputs",
+            "path": "/mnt/user-data/workspace/.system/tool-offload",
             "pattern": "*.json",
         }
     )
     offload_payload = json.loads(offload_result.replace("[file_glob]\n", "", 1))
-    assert {"path": "/mnt/user-data/outputs/.tool-offload/query.json", "type": "file"} in offload_payload["entries"]
+    assert {"path": "/mnt/user-data/workspace/.system/tool-offload/query.json", "type": "file"} in offload_payload[
+        "entries"
+    ]
 
 
 @pytest.mark.asyncio
@@ -1499,13 +1745,13 @@ async def test_file_write_non_chart_json_has_no_chart_artifact_type(monkeypatch)
 
     result = await tools["file_write"].ainvoke(
         {
-            "file_path": "/mnt/user-data/outputs/query_result.json",
+            "file_path": "/mnt/user-data/workspace/summary.json",
             "content": {"rows": [{"month": "2026-01", "sales": 120}]},
         }
     )
 
     payload = json.loads(result.replace("[file_write]\n", "", 1))
-    assert payload["file_path"] == "/mnt/user-data/outputs/query_result.json"
+    assert payload["file_path"] == "/mnt/user-data/workspace/summary.json"
     assert "artifact_type" not in payload
 
 
@@ -1822,7 +2068,7 @@ async def test_semantic_query_tool_leaves_large_result_for_middleware(monkeypatc
 async def test_semantic_query_tool_rejects_missing_datasource_and_invalid_requests(monkeypatch):
     paths = ensure_conversation_workspace(f"conv_workspace_exec_reject_{uuid.uuid4().hex}")
     tools_without_datasource = _create_local_workspace_tools(monkeypatch, paths)
-    state_without_datasource = _analysis_query_state(paths, datasource_id=None)
+    state_without_datasource = _analysis_query_state(paths)
 
     with pytest.raises(ValueError, match="当前会话未绑定数据源"):
         await tools_without_datasource["data_analyzing_tool"].ainvoke(
@@ -1857,7 +2103,7 @@ async def test_semantic_query_tool_rejects_missing_datasource_and_invalid_reques
         )
 
     with pytest.raises(ValueError, match="semantic_config_id"):
-        await sql_tool_module.create_data_analyzing_tool().ainvoke(
+        await sql_tool_module.create_data_analyzing_tool("ds_1").ainvoke(
             {
                 "action": "execute_query",
                 "action_payload": {
@@ -1983,11 +2229,12 @@ async def test_semantic_query_tool_returns_dependency_error(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_file_read_reads_session_skill_snapshot(tmp_path):
+async def test_file_read_reads_session_skill_snapshot(tmp_path, monkeypatch):
     """技能正文只能从当前会话的 runtime-skills 快照读取。"""
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
     workspace_root = tmp_path / "threads" / "u1" / "conv_a" / "user-data"
     workspace_root.mkdir(parents=True)
-    snapshot_skill = workspace_root.parent / "runtime-skills" / "demo-skill"
+    snapshot_skill = runtime_skills_snapshot_dir_from_workspace(str(workspace_root)) / "demo-skill"
     snapshot_skill.mkdir(parents=True)
     (snapshot_skill / "SKILL.md").write_text(
         "---\nname: demo-skill\ntitle: 快照版\ndescription: 来自快照\n---\n# 快照版正文\n",
@@ -2009,12 +2256,13 @@ async def test_file_read_reads_session_skill_snapshot(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_file_read_rejects_skill_not_in_snapshot(tmp_path):
+async def test_file_read_rejects_skill_not_in_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
     workspace_root = tmp_path / "threads" / "u1" / "conv_b" / "user-data"
     workspace_root.mkdir(parents=True)
     # 预置另一个技能，使快照目录非空（_ensure_snapshot_async 直接复用、不触发管理域构建）；
     # 但不放入 demo-skill，模拟其被禁用/草稿而排除在快照外。
-    other = workspace_root.parent / "runtime-skills" / "other-skill"
+    other = runtime_skills_snapshot_dir_from_workspace(str(workspace_root)) / "other-skill"
     other.mkdir(parents=True)
     (other / "SKILL.md").write_text("---\nname: other-skill\ntitle: 其他\n---\n# 其他\n", encoding="utf-8")
 
@@ -2062,9 +2310,10 @@ async def test_file_grep_single_file_returns_matches(monkeypatch, tmp_path):
 @pytest.mark.asyncio
 async def test_file_grep_single_skill_file_returns_visible_path(monkeypatch, tmp_path):
     """file_grep on a single skill file must return the /mnt/skills visible path."""
+    monkeypatch.setattr("utils.storage_paths.THREADS_DIR", tmp_path / "threads")
     workspace_root = tmp_path / "threads" / "u1" / "conv_grep_skill" / "user-data"
     workspace_root.mkdir(parents=True)
-    skill_dir = workspace_root.parent / "runtime-skills" / "demo-skill"
+    skill_dir = runtime_skills_snapshot_dir_from_workspace(str(workspace_root)) / "demo-skill"
     skill_dir.mkdir(parents=True)
     guide = skill_dir / "references" / "guide.md"
     guide.parent.mkdir(parents=True)
@@ -2214,10 +2463,10 @@ def test_resolve_workspace_path_opens_uploads_only_for_explicit_switch(monkeypat
     assert target == Path(paths["uploads"]) / "a.txt"
     # 审计目录的保护不随开关放宽
     for audit_path in (
-        "/mnt/user-data/outputs/query_result/result_1.json",
-        "/mnt/user-data/outputs/.tool-offload/result_1.json",
+        "/mnt/user-data/workspace/.system/query_result/result_1.json",
+        "/mnt/user-data/workspace/.system/tool-offload/result_1.json",
     ):
-        with pytest.raises(ValueError, match="系统结果目录"):
+        with pytest.raises(ValueError, match="workspace/.system"):
             resolve_workspace_path(
                 paths["root"],
                 audit_path,
@@ -2248,8 +2497,8 @@ def test_delete_local_workspace_file_rejects_dirs_roots_and_audit_paths(monkeypa
     nested = Path(paths["workspace"]) / "reports"
     nested.mkdir()
     (nested / "a.txt").write_text("x", encoding="utf-8")
-    audit = Path(paths["outputs"]) / "query_result" / "result_1.json"
-    audit.parent.mkdir()
+    audit = Path(paths["workspace"]) / ".system" / "query_result" / "result_1.json"
+    audit.parent.mkdir(parents=True, exist_ok=True)
     audit.write_text("{}", encoding="utf-8")
     uploaded = Path(paths["uploads"]) / "a.txt"
     uploaded.write_text("x", encoding="utf-8")
@@ -2272,10 +2521,10 @@ def test_delete_local_workspace_file_rejects_dirs_roots_and_audit_paths(monkeypa
                 root_path,
                 allow_uploads=True,
             )
-    with pytest.raises(ValueError, match="系统结果目录"):
+    with pytest.raises(ValueError, match="workspace/.system"):
         workspace_local_backend_module.delete_local_workspace_file(
             paths["root"],
-            "/mnt/user-data/outputs/query_result/result_1.json",
+            "/mnt/user-data/workspace/.system/query_result/result_1.json",
             allow_uploads=True,
         )
     # 不开开关时（模型工具链路）uploads 同样不可删
@@ -2337,8 +2586,8 @@ async def test_delete_conversation_workspace_file_deletes_output_and_keeps_audit
     paths = _isolated_workspace(monkeypatch, tmp_path, conversation_id, created_date="2026-09-14")
     report = Path(paths["outputs"]) / "report.docx"
     report.write_bytes(b"docx")
-    audit = Path(paths["outputs"]) / "query_result" / "result_1.json"
-    audit.parent.mkdir()
+    audit = Path(paths["workspace"]) / ".system" / "query_result" / "result_1.json"
+    audit.parent.mkdir(parents=True, exist_ok=True)
     audit.write_text('{"rows":[1]}', encoding="utf-8")
 
     async def no_running_run(*_args, **_kwargs):
@@ -2365,11 +2614,11 @@ async def test_delete_conversation_workspace_file_deletes_output_and_keeps_audit
     assert not report.exists()
 
     # 查询结果是审计留存：既不删文件，也不给「删了」的成功返回
-    with pytest.raises(ValueError, match="留存审计"):
+    with pytest.raises(ValueError, match="系统数据目录"):
         await conversation_workspace_module.delete_conversation_workspace_file(
             conversation_id,
             user_id="user_a",
-            path="/mnt/user-data/outputs/query_result/result_1.json",
+            path="/mnt/user-data/workspace/.system/query_result/result_1.json",
         )
     assert audit.exists()
 
@@ -2530,10 +2779,10 @@ def test_archive_excludes_system_result_and_internal_files(monkeypatch, tmp_path
     root = Path(paths["root"])
     (root / "outputs").mkdir(parents=True, exist_ok=True)
     (root / "outputs" / "result.csv").write_text("visible", encoding="utf-8")
-    (root / "outputs" / "query_result").mkdir(parents=True, exist_ok=True)
-    (root / "outputs" / "query_result" / "secret.csv").write_text("audit", encoding="utf-8")
-    (root / "outputs" / ".tool-offload").mkdir(parents=True, exist_ok=True)
-    (root / "outputs" / ".tool-offload" / "blob.bin").write_bytes(b"\x00\x01")
+    (root / "workspace" / ".system" / "query_result").mkdir(parents=True, exist_ok=True)
+    (root / "workspace" / ".system" / "query_result" / "secret.csv").write_text("audit", encoding="utf-8")
+    (root / "workspace" / ".system" / "tool-offload").mkdir(parents=True, exist_ok=True)
+    (root / "workspace" / ".system" / "tool-offload" / "blob.bin").write_bytes(b"\x00\x01")
     (root / "workspace" / "data_context.json").write_text("{}", encoding="utf-8")
     (root / "workspace" / "note.txt").write_text("other dir", encoding="utf-8")
 

@@ -304,7 +304,7 @@ async def test_context_compression_references_parallel_tool_results_without_brea
     )
     recovery_b = build_tool_result_recovery(
         source_tool="data_analyzing_tool",
-        result_path="/mnt/user-data/outputs/.tool-offload/result-b.json",
+        result_path="/mnt/user-data/workspace/.system/tool-offload/result-b.json",
         result_size_chars=6000,
         result_id="result-b",
     )
@@ -1104,7 +1104,7 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
     agent = data_agent.create_data_agent(
         checkpointer="ckpt",
         identity_context=data_agent.IdentityContext(user_id="u1"),
-        datasource_context=data_agent.DatasourceContext(datasource_id="ds_a"),
+        business_context=data_agent.BusinessContext(values={"datasource_id": "ds_a"}),
         model_invocation=data_agent.ModelInvocationConfig(system_prompt="智能问数系统提示词", model_id="m1"),
     )
 
@@ -1114,7 +1114,9 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
     assert captured["checkpointer"] == "ckpt"
     assert captured["system_prompt"] == "智能问数系统提示词"
     assert captured["state_schema"] is data_agent.ChatDataAgentState
-    assert captured["name"] == "chat_data_agent"
+    # 不向 create_agent 传 name：该 name 会写进每条 AIMessage 并原样进入 OpenAI
+    # 请求体，严格模板（assistant name 必须等于 tool call 名）会直接 400。
+    assert "name" not in captured
     assert [getattr(tool, "name", tool) for tool in captured["tools"]] == [
         "file_read",
         "file_edit",
@@ -1130,6 +1132,7 @@ def test_tool_error_middleware_and_chat_data_agent_create_agent(monkeypatch):
         "dir_delete",
         "parse_document",
         "read_image",
+        "data2image",
         "present_artifacts",
         "get_current_time",
         "load_skill",
