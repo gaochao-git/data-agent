@@ -48,7 +48,7 @@ CREATE TABLE `chat_data_subagent_session` (
   `user_id` varchar(255) NOT NULL COMMENT '业务归属用户ID',
   `latest_task_id` varchar(64) NOT NULL COMMENT '最近一轮任务ID',
   `turn_count` int NOT NULL DEFAULT '1' COMMENT '已完成的对话轮次',
-  `messages_json` mediumtext NOT NULL DEFAULT '[]' COMMENT '完整消息历史JSON（每次收口整体覆盖）',
+  `messages_json` mediumtext NOT NULL COMMENT '完整消息历史JSON（每次收口整体覆盖）',
   `session_status` varchar(16) NOT NULL DEFAULT 'open' COMMENT '会话状态: open-可追问, closed-已永久关闭',
   `closed_time` datetime DEFAULT NULL COMMENT '永久关闭时间',
   `delete_flag` tinyint NOT NULL DEFAULT '0' COMMENT '删除标识: 0-未删除, 1-已删除',
