@@ -407,6 +407,19 @@ def test_model_failure_user_message_maps_friendly_text():
     # 401 认证失败（key 配置错误场景）
     auth_error = _make_openai_status_error(openai.AuthenticationError, 401)
     assert "认证失败" in _model_failure_user_message(auth_error)
+    # 403 权限不足：使用固定用户文案，不透出服务商原始 message（可能包含内部账号信息）
+    permission_error = _make_openai_status_error(
+        openai.PermissionDeniedError,
+        403,
+        body={
+            "error": {
+                "message": "During task with name 'model' and id 'abc' | user=60344-总行业务操作员高超",
+            }
+        },
+    )
+    permission_message = _model_failure_user_message(permission_error)
+    assert permission_message == "模型服务权限不足，请检查模型服务账号权限或当前用户的模型访问授权后重试。"
+    assert "user=" not in permission_message
     # 连接中断（流中途被上游断开场景）
     conn_error = openai.APIConnectionError(
         message="Connection error.",

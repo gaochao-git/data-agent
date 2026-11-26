@@ -164,6 +164,8 @@ def _model_failure_user_message(exc: Exception) -> str:
         return "模型服务响应超时，请点击继续重试。"
     if isinstance(exc, openai.AuthenticationError):
         return "模型服务认证失败，请检查模型服务 API Key 配置后重试。"
+    if isinstance(exc, openai.PermissionDeniedError):
+        return "模型服务权限不足，请检查模型服务账号权限或当前用户的模型访问授权后重试。"
     if isinstance(exc, openai.RateLimitError):
         return "模型服务当前繁忙，请稍后点击继续重试，或更换其他模型。"
     if isinstance(exc, openai.APIConnectionError):
