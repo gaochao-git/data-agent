@@ -135,7 +135,8 @@ export CHAT_DATA_HOME=/path/to/chat_data
 第二步，确认 dry-run 结果后执行迁移：
 
 ```bash
-/tools/apps/dataagent/venv/bin/python scripts/migrate_workspace_system_layout.py --apply
+/tools/apps/dataagent/venv/bin/python scripts/migrate_workspace_system_layout.py --chat-data-home /xxx/xx
+/tools/apps/dataagent/venv/bin/python scripts/migrate_workspace_system_layout.py --chat-data-home /xxx/xx --apply 
 ```
 
 迁移映射：
