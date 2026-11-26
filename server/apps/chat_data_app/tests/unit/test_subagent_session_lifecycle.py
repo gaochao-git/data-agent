@@ -36,7 +36,7 @@ class _FakeEventService:
         self.events.append(kwargs)
 
 
-def _settings(*, max_active: int = 20, max_per: int = 5):
+def _settings(*, max_active: int = 5, max_per: int = 20):
     values = {
         "CHAT_DATA_SUBAGENT_TASK_MAX_ACTIVE": max_active,
         "CHAT_DATA_SUBAGENT_MAX_PER_CONVERSATION": max_per,

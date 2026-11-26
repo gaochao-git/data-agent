@@ -46,7 +46,8 @@ def test_subagent_limits_use_semantic_names():
         "CHAT_DATA_SUBAGENT_TASK_MAX_ACTIVE",
     }
     assert task_keys <= setting_service.SETTING_REGISTRY.keys()
-    assert setting_service.SETTING_REGISTRY["CHAT_DATA_SUBAGENT_MAX_PER_CONVERSATION"].default == 5
+    assert setting_service.SETTING_REGISTRY["CHAT_DATA_SUBAGENT_TASK_MAX_ACTIVE"].default == 5
+    assert setting_service.SETTING_REGISTRY["CHAT_DATA_SUBAGENT_MAX_PER_CONVERSATION"].default == 20
     assert "CHAT_DATA_SUBAGENT_MAX_SESSIONS_PER_CONVERSATION" not in setting_service.SETTING_REGISTRY
     assert "CHAT_DATA_SUBAGENT_TASK_MAX_PER_CONVERSATION" not in setting_service.SETTING_REGISTRY
     assert "CHAT_DATA_SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO" not in setting_service.SETTING_REGISTRY

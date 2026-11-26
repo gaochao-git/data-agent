@@ -46,8 +46,8 @@ class _FakeEventService:
 
 
 def _settings(
-    max_active: int = 20,
-    max_subagents_per_conversation: int = 5,
+    max_active: int = 5,
+    max_subagents_per_conversation: int = 20,
     timeout_seconds: int = 60,
 ):
     values = {

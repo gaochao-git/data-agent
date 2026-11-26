@@ -2,7 +2,7 @@
 
 以下内容均由发布流程/DBA 在上线前手工执行，应用启动不会自动建表、也不会自动安装依赖。
 
-建议顺序：**DDL → 配置同步 → 依赖升级 → 重启服务**。依赖升级与重启必须在同一发版窗口内覆盖所有后端节点（含 Active 机房全部 worker 节点与 Standby 机房），避免同一会话的请求落到新旧版本混装的进程上。
+建议顺序：**DDL → 配置同步 → 存量会话目录迁移 → 依赖升级 → 重启服务**。目录迁移应在切流或停写窗口执行；依赖升级与重启必须在同一发版窗口内覆盖所有后端节点（含 Active 机房全部 worker 节点与 Standby 机房），避免同一会话的请求落到新旧版本混装的进程上。
 
 ## 数据库变更
 
@@ -110,8 +110,48 @@ CREATE TABLE `chat_data_subagent_event` (
 以 `server/.env.example` 为对照，把以下变更同步到生产 `server/conf/.env-<环境>`（示例文件本身不参与运行）：
 
 - 子智能体收敛为 explore / general：`CHAT_DATA_DEFAULT_PLAN_SUBAGENT_ENABLED` 已无对应实现，生产若残留可删除；新增 `CHAT_DATA_DEFAULT_GENERAL_SUBAGENT_ENABLED=false`（默认关闭，按需开启）。
-- 新增 4 个后台任务控制项：`CHAT_DATA_SUBAGENT_TASK_TIMEOUT_SECONDS=1800`、`CHAT_DATA_SUBAGENT_TASK_LEASE_SECONDS=30`、`CHAT_DATA_SUBAGENT_TASK_MAX_ACTIVE=20`、`CHAT_DATA_SUBAGENT_MAX_PER_CONVERSATION=5`。最后一项是**单个主对话内当前可用子智能体总数上限**；已关闭会话不计入，用户可在管理面板关闭不再使用的终态子智能体释放额度。
+- 新增 4 个后台任务控制项：`CHAT_DATA_SUBAGENT_TASK_TIMEOUT_SECONDS=1800`、`CHAT_DATA_SUBAGENT_TASK_LEASE_SECONDS=30`、`CHAT_DATA_SUBAGENT_TASK_MAX_ACTIVE=5`、`CHAT_DATA_SUBAGENT_MAX_PER_CONVERSATION=20`。`TASK_MAX_ACTIVE` 是**单个主对话内同时执行中的子智能体上限**，`MAX_PER_CONVERSATION` 是**单个主对话内当前可用子智能体总数上限**；已关闭会话不计入总数，用户可在管理面板关闭不再使用的终态子智能体释放额度。
 - 旧名 `CHAT_DATA_SUBAGENT_MAX_SESSIONS_PER_CONVERSATION` 已统一为 `CHAT_DATA_SUBAGENT_MAX_PER_CONVERSATION`，旧名不再读取；生产配置若残留请直接删除。子智能体预算告警软约束 `CHAT_DATA_SUBAGENT_BUDGET_ALERT_TRIGGER_RATIO` 已无实现，残留配置同样可删除。
+
+## 存量会话目录迁移
+
+新版把查询结果和工具卸载文件统一收敛到会话的 `workspace/.system/`。存量会话需在切流或停写窗口执行一次迁移脚本，脚本只处理 `threads/<uid>/<date>/<conversation_id>/user-data`，不处理用户技能、插件和运行缓存。
+
+先进入 `server/` 并设置 `CHAT_DATA_HOME`。该目录下必须存在 `threads/`，实际路径以现场部署为准：
+
+```bash
+cd /tools/apps/dataagent/server
+export CHAT_DATA_HOME=/path/to/chat_data
+```
+
+第一步只做 dry-run，确认扫描到的会话数、待移动文件数和冲突数：
+
+```bash
+/tools/apps/dataagent/venv/bin/python scripts/migrate_workspace_system_layout.py
+```
+
+输出中 `moved` 是待移动文件数，`conflicts` 是目标已存在或源文件为符号链接而未处理的数量。默认不会修改任何文件。
+
+第二步，确认 dry-run 结果后执行迁移：
+
+```bash
+/tools/apps/dataagent/venv/bin/python scripts/migrate_workspace_system_layout.py --apply
+```
+
+迁移映射：
+
+```text
+outputs/query_result/   -> workspace/.system/query_result/
+outputs/.tool-offload/  -> workspace/.system/tool-offload/
+```
+
+脚本幂等，目标文件已存在时不覆盖。若有冲突，先人工核对源目录与目标目录，处理后再执行一次；脚本会保留未清空的源目录现场。
+
+注意：
+
+- 旧 `workspace/semantic/` 不迁移，应用会按当前数据源重新物化，旧文件不再读取。
+- 历史消息中的旧 `result_path` 不会自动改写，升级后的历史结果卡片可能需要重新查询或由前端按 `result_id` 重新定位。
+- 不使用 `CHAT_DATA_HOME` 时，也可通过 `--chat-data-home` 显式指定路径。
 
 ## 依赖升级（LangChain / LangGraph 全家桶）
 
