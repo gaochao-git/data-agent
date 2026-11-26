@@ -102,6 +102,8 @@ def test_replace_memory_document_requires_current_mtime_and_preserves_user_text(
     memory_path = workspace_root / "memory" / "memory.md"
     memory_path.parent.mkdir(parents=True)
     memory_path.write_text(render_memory_document([MemoryItem(category="口径", content="A")]), encoding="utf-8")
+    # 部分生产文件系统的 mtime 精度较粗；显式设旧，避免连续两次写入落在同一时间刻度。
+    os.utime(memory_path, (1_600_000_000, 1_600_000_000))
     expected_mtime = memory_path.stat().st_mtime
     edited = "# 会话记忆\n\n- [偏好] 用户手动维护的条目\n"
 
@@ -109,6 +111,7 @@ def test_replace_memory_document_requires_current_mtime_and_preserves_user_text(
 
     assert payload["path"] == "/mnt/user-data/memory/memory.md"
     assert payload["bytes"] == len(edited.encode("utf-8"))
+    assert payload["mtime"] > expected_mtime
     assert memory_path.read_text(encoding="utf-8") == edited
     assert not list(workspace_root.glob(".memory-*.tmp"))
     with pytest.raises(svc.MemoryDocumentConflictError, match="刷新后重试"):
